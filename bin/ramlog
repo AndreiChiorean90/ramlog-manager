@@ -211,21 +211,17 @@ def configure_nginx():
         if "ramlog-manager" in str(path):
             continue
         def transform(text):
-            def repl(m):
-                directive, indent, rest = m.group(1), m.group(2), m.group(3)
-                if directive == "access_log" and rest.strip().startswith("off"):
-                    return m.group(0)
-                target = "/run/bjm-app-logs/nginx/" + ("access.log" if directive == "access_log" else "error.log")
+            def replace_directive(match):
+                indent, directive, rest = match.group(1), match.group(2), match.group(3)
                 parts = rest.split()
-                if not parts:
-                    return m.group(0)
-                if directive == "access_log":
-                    suffix = " ".join(parts[1:]) or "combined"
-                else:
-                    suffix = " ".join(parts[1:])
+                if not parts or (directive == "access_log" and parts[0] == "off"):
+                    return match.group(0)
+                target = "/run/bjm-app-logs/nginx/" + (
+                    "access.log" if directive == "access_log" else "error.log")
+                suffix = " ".join(parts[1:])
                 return f"{indent}{directive} {target}" + (f" {suffix}" if suffix else "") + ";"
-            return re.sub(r"^(\s*)(access_log|error_log)\s+([^;]*);", 
-                          lambda m: repl(type("M", (), {"group": lambda self,n: (None, m.group(1), m.group(2), m.group(3))[n]})()), text, flags=re.M)
+            return re.sub(r"^(\\s*)(access_log|error_log)\\s+([^;]*);",
+                          replace_directive, text, flags=re.M)
         if set_text(path, transform):
             changed_any = True
     if changed_any:
@@ -233,7 +229,7 @@ def configure_nginx():
         if rc:
             raise RuntimeError("nginx configuration test failed: " + out)
         RESTARTS.add("nginx")
-    print("Nginx: active configuration log directives inspected and redirected where configured.")
+    print("Nginx: configured access/error destinations redirected and syntax checked.")
 
 def configure_php_fpm():
     p = Path("/etc/php")
@@ -291,6 +287,18 @@ def configure_mattermost():
     except Exception as exc:
         UNSUPPORTED.append(f"Mattermost config not changed: {exc}")
 
+def configure_lightdm():
+    if not Path("/usr/sbin/lightdm").exists():
+        return
+    dropin = Path("/etc/lightdm/lightdm.conf.d/99-ramlog-manager.conf")
+    body = ("[LightDM]\\n"
+            "log-directory=/run/bjm-app-logs/lightdm\\n"
+            "[Seat:*]\\n"
+            "xserver-command=X -core -logfile /run/bjm-app-logs/lightdm/Xorg.0.log\\n")
+    record_write(dropin, body.encode(), 0o644)
+    RESTARTS.add("lightdm")
+    print("LightDM/Xorg: log directory and Xorg logfile redirected; restart ends active graphical sessions.")
+
 def configure():
     require_root()
     CHANGES.clear()
@@ -323,7 +331,7 @@ def configure():
         print(" - Nginx configured access/error destinations")
         print(" - PHP-FPM global error logs")
         print(" - PostgreSQL clusters with managed collector config")
-        print(" - Mattermost file log directory")
+        print(" - Mattermost file log directory")\n        print(" - LightDM/Xorg log directory (if LightDM is installed)")
         print(" - rsyslog existing RAM rules preserved (not rewritten)")
         if UNSUPPORTED:
             print("\nUNSUPPORTED / NEEDS ATTENTION:")
