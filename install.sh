@@ -19,7 +19,10 @@ systemctl daemon-reload
 systemctl enable ramlog-export.service
 
 echo
-echo "RAMLog Manager 0.1.0 installed."
-echo "No logging configuration was changed."
+echo "RAMLog Manager 0.2.0 installed."
+echo "Existing configuration was preserved."
+echo "No application logging configuration was changed by installation."
 echo "Run: ramlog status"
 echo "Run: ramlog audit"
+echo "Run: ramlog verify"
+echo "Run: ramlog apply (journald adapter only)"
