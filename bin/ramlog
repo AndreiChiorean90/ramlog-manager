@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""RAMLog Manager 0.2.0: guarded RAM-journal configuration and verification."""
 import argparse
 import configparser
 import datetime as dt
@@ -12,101 +13,203 @@ import sys
 import tarfile
 import tempfile
 
+VERSION = "0.2.0"
 CONFIG = Path("/etc/ramlog/ramlog.conf")
+JOURNAL_DROPIN = Path("/etc/systemd/journald.conf.d/99-ramlog-manager.conf")
+JOURNAL_CONTENT = "[Journal]\nStorage=volatile\nRuntimeMaxUse=200M\nRuntimeKeepFree=50M\n"
+
+def run(cmd):
+    try:
+        p = subprocess.run(cmd, text=True, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, check=False)
+        return p.returncode, p.stdout.strip()
+    except FileNotFoundError:
+        return 127, f"{cmd[0]}: not installed"
 
 def read_config():
     cfg = configparser.ConfigParser()
     if CONFIG.exists():
         cfg.read(CONFIG)
-    paths = cfg.get("sources", "paths", fallback="/run/log/journal,/run/rsyslog").split(",")
+    paths = cfg.get("sources", "paths",
+                    fallback="/run/log/journal,/run/rsyslog,/run/bjm-app-logs").split(",")
     archive = cfg.get("archive", "directory", fallback="/var/log/ramlog-archive")
     return [Path(p.strip()) for p in paths if p.strip()], Path(archive.strip())
 
-def run(cmd):
-    try:
-        return subprocess.run(cmd, text=True, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, check=False).stdout.strip()
-    except FileNotFoundError:
-        return f"{cmd[0]}: not installed"
-
 def mount_type(path):
-    out = run(["findmnt", "-n", "-o", "FSTYPE", "--target", str(path)])
-    return out or "unknown/not mounted"
+    if not path.exists():
+        return "missing"
+    rc, out = run(["findmnt", "-n", "-o", "FSTYPE", "--target", str(path)])
+    return out if rc == 0 and out else "unknown"
+
+def is_ram(path):
+    return mount_type(path) in ("tmpfs", "ramfs")
+
+def require_root():
+    if os.geteuid() != 0:
+        raise SystemExit("Run as root.")
+
+def backup_file(path):
+    if not path.exists():
+        return None
+    stamp = dt.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    backup = Path("/var/backups/ramlog-manager") / stamp / path.relative_to("/")
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(path, backup)
+    return backup
+
+def atomic_write(path, content, mode=0o644):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(name, mode)
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+def open_persistent_writers():
+    if not shutil.which("lsof"):
+        return None
+    rc, out = run(["bash", "-lc",
+        "lsof -nP 2>/dev/null | awk '$NF ~ /^\\/var\\/log\\// && $NF !~ /^\\/var\\/log\\/(ramlog-archive|log-archive)\\// {print $1, $2, $4, $NF}' | sort -u"])
+    return [line for line in out.splitlines() if line] if out else []
 
 def status():
     sources, archive = read_config()
-    print(f"RAMLog Manager 0.1.0 — {socket.gethostname()}")
-    print(f"Archive destination: {archive}")
-    print("\nConfigured log sources:")
+    print(f"RAMLog Manager {VERSION} — {socket.gethostname()}")
+    print(f"Archive destination: {archive} (filesystem={mount_type(archive.parent if archive.parent.exists() else Path('/var/log'))})")
+    print("\nConfigured sources:")
     for p in sources:
-        print(f"  {p}: {'present' if p.exists() else 'missing'}; filesystem={mount_type(p) if p.exists() else 'n/a'}")
-    print("\nLogging services:")
-    for svc in ("systemd-journald", "rsyslog", "auditd"):
-        print(f"  {svc}: {run(['systemctl', 'is-active', svc])}")
-    print("\nShutdown exporter:")
-    print(f"  {run(['systemctl', 'is-enabled', 'ramlog-export.service'])}")
-    print("\nNOTE: status is informational; it does not certify RAM-only logging.")
+        print(f"  {p}: {'present' if p.exists() else 'missing'}; filesystem={mount_type(p)}")
+    print("\nServices:")
+    for svc in ("systemd-journald", "rsyslog", "apache2", "nginx", "php8.4-fpm", "postgresql"):
+        print(f"  {svc}: {run(['systemctl', 'is-active', svc])[1]}")
+    print(f"\nShutdown exporter: {run(['systemctl', 'is-enabled', 'ramlog-export.service'])[1]}")
 
 def audit():
-    print(f"RAMLog audit — {socket.gethostname()}")
-    print("\n[Persistent files under /var/log]")
-    out = run(["find", "/var/log", "-xdev", "-type", "f",
-               "-printf", "%s bytes\\t%u:%g\\t%p\\n"])
-    print(out or "(none found)")
-    print("\n[Processes with open files under /var/log]")
-    if shutil.which("lsof"):
-        out = run(["bash", "-lc", "lsof -nP 2>/dev/null | awk '$NF ~ /^\\/var\\/log\\// {print $1, $2, $4, $NF}' | sort -u"])
-        print(out or "(none reported)")
+    print(f"RAMLog audit — {socket.gethostname()} (v{VERSION})")
+    writers = open_persistent_writers()
+    print("\n[Open persistent log files]")
+    if writers is None:
+        print("lsof unavailable; install lsof for process-level detection.")
+    elif writers:
+        print("\n".join(writers))
     else:
-        print("lsof is not installed; open-file audit unavailable.")
-    print("\n[Journal usage]")
-    print(run(["journalctl", "--disk-usage"]))
-    print("\n[Configured RAM source paths]")
-    sources, _ = read_config()
-    for p in sources:
-        if p.exists():
-            print(f"{p}: filesystem={mount_type(p)}")
+        print("(none detected)")
+    print("\n[Persistent files under /var/log — inventory only]")
+    rc, out = run(["find", "/var/log", "-xdev", "-type", "f",
+                   "-printf", "%s bytes\\t%u:%g\\t%p\\n"])
+    print(out or "(none found)")
+    print("\n[Journal]")
+    print(run(["journalctl", "--disk-usage"])[1])
+    print("\n[Configured RAM sources]")
+    for p in read_config()[0]:
+        print(f"{p}: {mount_type(p)}")
+
+def apply():
+    require_root()
+    if not Path("/run").is_mount():
+        raise SystemExit("REFUSED: /run is not a mount point; cannot guarantee RAM-backed logging.")
+    if mount_type(Path("/run")) not in ("tmpfs", "ramfs"):
+        raise SystemExit("REFUSED: /run is not tmpfs/ramfs.")
+    if not shutil.which("systemctl"):
+        raise SystemExit("REFUSED: systemd is required.")
+    JOURNAL_DROPIN.parent.mkdir(parents=True, exist_ok=True)
+    backup = backup_file(JOURNAL_DROPIN)
+    atomic_write(JOURNAL_DROPIN, JOURNAL_CONTENT, 0o644)
+    print(f"Installed journald RAM policy: {JOURNAL_DROPIN}")
+    print(f"Previous configuration backup: {backup or '(file did not previously exist)'}")
+    rc, out = run(["systemctl", "restart", "systemd-journald"])
+    if rc != 0:
+        if backup and backup.exists():
+            shutil.copy2(backup, JOURNAL_DROPIN)
         else:
-            print(f"{p}: MISSING")
-    print("\n[Important]")
-    print("This is an inventory, not a compliance verdict. Review application-specific")
-    print("logging (databases, web servers, runtimes and applications) separately.")
+            JOURNAL_DROPIN.unlink(missing_ok=True)
+        run(["systemctl", "daemon-reload"])
+        raise SystemExit(f"journald restart failed; configuration rolled back. Details: {out}")
+    print("systemd-journald restarted; Storage=volatile is now active.")
+    print("No other service configurations were changed.")
+    writers = open_persistent_writers()
+    if writers is None:
+        print("WARNING: lsof unavailable; application writers could not be verified.")
+    elif writers:
+        print("\nREMAINING PERSISTENT WRITERS (not modified by this release):")
+        print("\n".join(writers))
+        print("\nResult: PARTIAL. These writers require service-specific adapters.")
+    else:
+        print("No open persistent /var/log writers detected by lsof.")
+
+def verify():
+    sources, archive = read_config()
+    failures = []
+    print(f"RAMLog verification — {socket.gethostname()} (v{VERSION})")
+    journal = mount_type(Path("/run/log/journal"))
+    print(f"journald runtime path: {journal}")
+    if journal not in ("tmpfs", "ramfs"):
+        failures.append("journald runtime journal is not RAM-backed")
+    for p in sources:
+        fs = mount_type(p)
+        print(f"source {p}: {fs}")
+        if p.exists() and fs not in ("tmpfs", "ramfs"):
+            failures.append(f"configured source is not RAM-backed: {p}")
+    writers = open_persistent_writers()
+    if writers is None:
+        failures.append("lsof unavailable; persistent writers cannot be verified")
+    elif writers:
+        failures.append("active persistent log writers detected:")
+        failures.extend(writers)
+    if not archive.parent.exists() or not os.access(archive.parent, os.W_OK):
+        failures.append(f"archive destination is not writable: {archive.parent}")
+    print("\nRESULT: " + ("PASS" if not failures else "FAIL / INCOMPLETE"))
+    for item in failures:
+        print(" - " + item)
+    return 0 if not failures else 2
 
 def export():
-    if os.geteuid() != 0:
-        raise SystemExit("Run as root.")
+    require_root()
     sources, archive_dir = read_config()
     existing = [p for p in sources if p.exists()]
+    unsafe = [p for p in existing if not is_ram(p)]
+    if unsafe:
+        raise SystemExit("REFUSED: refusing to archive non-RAM source(s): " +
+                         ", ".join(str(p) for p in unsafe))
     if not existing:
         raise SystemExit("No configured RAM source paths exist; nothing archived.")
     archive_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(archive_dir, 0o700)
     stamp = dt.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-    host = socket.gethostname()
-    target = archive_dir / f"{host}-ram-logs-{stamp}.tar.gz"
-    with tempfile.NamedTemporaryFile(prefix="ramlog-", suffix=".tmp", dir=archive_dir, delete=False) as tmp:
-        tmp_path = Path(tmp.name)
+    target = archive_dir / f"{socket.gethostname()}-ram-logs-{stamp}.tar.gz"
+    fd, name = tempfile.mkstemp(prefix="ramlog-", suffix=".tmp", dir=archive_dir)
+    os.close(fd)
+    tmp = Path(name)
     try:
-        with tarfile.open(tmp_path, "w:gz") as tf:
+        with tarfile.open(tmp, "w:gz") as tf:
             for p in existing:
                 tf.add(p, arcname=str(p).lstrip("/"), recursive=True)
-        os.chmod(tmp_path, 0o600)
-        os.replace(tmp_path, target)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, target)
     finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
+        tmp.unlink(missing_ok=True)
     digest = hashlib.sha256(target.read_bytes()).hexdigest()
     manifest = target.with_suffix(target.suffix + ".sha256")
-    manifest.write_text(f"{digest}  {target.name}\\n")
+    manifest.write_text(f"{digest}  {target.name}\n")
     os.chmod(manifest, 0o600)
     print(f"Archive created: {target}")
     print(f"SHA-256: {digest}")
 
 def main():
-    p = argparse.ArgumentParser(description="RAM-first logging audit and archive utility")
-    p.add_argument("command", choices=("status", "audit", "export"))
+    p = argparse.ArgumentParser(description="RAM-first logging manager for Debian/Ubuntu")
+    p.add_argument("command", choices=("status", "audit", "apply", "verify", "export"))
     args = p.parse_args()
-    {"status": status, "audit": audit, "export": export}[args.command]()
+    actions = {"status": status, "audit": audit, "apply": apply,
+               "verify": verify, "export": export}
+    result = actions[args.command]()
+    if args.command == "verify":
+        raise SystemExit(result)
 
 if __name__ == "__main__":
     main()
