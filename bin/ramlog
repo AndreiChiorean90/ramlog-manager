@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+import argparse
+import configparser
+import datetime as dt
+import hashlib
+import os
+from pathlib import Path
+import shutil
+import socket
+import subprocess
+import sys
+import tarfile
+import tempfile
+
+CONFIG = Path("/etc/ramlog/ramlog.conf")
+
+def read_config():
+    cfg = configparser.ConfigParser()
+    if CONFIG.exists():
+        cfg.read(CONFIG)
+    paths = cfg.get("sources", "paths", fallback="/run/log/journal,/run/rsyslog").split(",")
+    archive = cfg.get("archive", "directory", fallback="/var/log/ramlog-archive")
+    return [Path(p.strip()) for p in paths if p.strip()], Path(archive.strip())
+
+def run(cmd):
+    try:
+        return subprocess.run(cmd, text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, check=False).stdout.strip()
+    except FileNotFoundError:
+        return f"{cmd[0]}: not installed"
+
+def mount_type(path):
+    out = run(["findmnt", "-n", "-o", "FSTYPE", "--target", str(path)])
+    return out or "unknown/not mounted"
+
+def status():
+    sources, archive = read_config()
+    print(f"RAMLog Manager 0.1.0 — {socket.gethostname()}")
+    print(f"Archive destination: {archive}")
+    print("\nConfigured log sources:")
+    for p in sources:
+        print(f"  {p}: {'present' if p.exists() else 'missing'}; filesystem={mount_type(p) if p.exists() else 'n/a'}")
+    print("\nLogging services:")
+    for svc in ("systemd-journald", "rsyslog", "auditd"):
+        print(f"  {svc}: {run(['systemctl', 'is-active', svc])}")
+    print("\nShutdown exporter:")
+    print(f"  {run(['systemctl', 'is-enabled', 'ramlog-export.service'])}")
+    print("\nNOTE: status is informational; it does not certify RAM-only logging.")
+
+def audit():
+    print(f"RAMLog audit — {socket.gethostname()}")
+    print("\n[Persistent files under /var/log]")
+    out = run(["find", "/var/log", "-xdev", "-type", "f",
+               "-printf", "%s bytes\\t%u:%g\\t%p\\n"])
+    print(out or "(none found)")
+    print("\n[Processes with open files under /var/log]")
+    if shutil.which("lsof"):
+        out = run(["bash", "-lc", "lsof -nP 2>/dev/null | awk '$NF ~ /^\\/var\\/log\\// {print $1, $2, $4, $NF}' | sort -u"])
+        print(out or "(none reported)")
+    else:
+        print("lsof is not installed; open-file audit unavailable.")
+    print("\n[Journal usage]")
+    print(run(["journalctl", "--disk-usage"]))
+    print("\n[Configured RAM source paths]")
+    sources, _ = read_config()
+    for p in sources:
+        if p.exists():
+            print(f"{p}: filesystem={mount_type(p)}")
+        else:
+            print(f"{p}: MISSING")
+    print("\n[Important]")
+    print("This is an inventory, not a compliance verdict. Review application-specific")
+    print("logging (databases, web servers, runtimes and applications) separately.")
+
+def export():
+    if os.geteuid() != 0:
+        raise SystemExit("Run as root.")
+    sources, archive_dir = read_config()
+    existing = [p for p in sources if p.exists()]
+    if not existing:
+        raise SystemExit("No configured RAM source paths exist; nothing archived.")
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(archive_dir, 0o700)
+    stamp = dt.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    host = socket.gethostname()
+    target = archive_dir / f"{host}-ram-logs-{stamp}.tar.gz"
+    with tempfile.NamedTemporaryFile(prefix="ramlog-", suffix=".tmp", dir=archive_dir, delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        with tarfile.open(tmp_path, "w:gz") as tf:
+            for p in existing:
+                tf.add(p, arcname=str(p).lstrip("/"), recursive=True)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, target)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    manifest = target.with_suffix(target.suffix + ".sha256")
+    manifest.write_text(f"{digest}  {target.name}\\n")
+    os.chmod(manifest, 0o600)
+    print(f"Archive created: {target}")
+    print(f"SHA-256: {digest}")
+
+def main():
+    p = argparse.ArgumentParser(description="RAM-first logging audit and archive utility")
+    p.add_argument("command", choices=("status", "audit", "export"))
+    args = p.parse_args()
+    {"status": status, "audit": audit, "export": export}[args.command]()
+
+if __name__ == "__main__":
+    main()
