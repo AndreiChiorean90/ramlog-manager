@@ -89,4 +89,3 @@ A shutdown archive is not guaranteed after power loss, kernel panic, forced rese
 - 0.4: compliance verification that detects active persistent log writers.
 - 1.0: tested Debian/Ubuntu support matrix and unattended-safe upgrade/rollback.
 
-The next validation target is BJMVSRV02. Do not deploy enforcement to other production servers until each adapter is tested on a representative host.
