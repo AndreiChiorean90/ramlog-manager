@@ -1,33 +1,42 @@
 # RAMLog Manager
 
 **Target:** Debian and Ubuntu with systemd  
-**Version:** 0.2.0 — guarded journald adapter and compliance verification
+**Version:** 0.3.0 — automatic service adapters (initial compatibility release)
 
-RAMLog Manager implements a RAM-first logging policy. Existing historical logs and archives are preserved.
+RAMLog Manager configures supported logging services to use volatile storage under `/run`, preserves prior configuration backups, and exports configured RAM log sources during orderly shutdown.
 
-## Commands
+## Install and use
 
 ```bash
+sudo ./install.sh
 sudo ramlog status
-sudo ramlog audit
 sudo ramlog apply
 sudo ramlog verify
-sudo ramlog export
 ```
 
-- `status`: reports configured source filesystems and service state.
-- `audit`: inventories open files under `/var/log` and historical files.
-- `apply`: configures journald for volatile storage on a RAM-backed `/run`, backs up the previous managed drop-in, and restarts journald. It does not rewrite application configs.
-- `verify`: checks that journald and configured sources are RAM-backed, checks archive writability, and fails if lsof detects open persistent log writers.
-- `export`: archives only configured paths verified to reside on tmpfs/ramfs, then writes a SHA-256 manifest.
+Run `apply` during a maintenance window. It may restart journald, rsyslog, Apache, Nginx, PHP-FPM, PostgreSQL clusters and Mattermost where their configuration changes. PostgreSQL restarts interrupt database connections.
 
-## Scope and safety
+## Adapters in 0.3.0
 
-This release has a managed journald adapter. It does **not** yet automatically rewrite Apache, Nginx, PHP-FPM, PostgreSQL, Mattermost, LightDM, Xorg or arbitrary application logging configurations. Such writers are reported by verification and cause an incomplete/failure result; they are never silently declared compliant or automatically disabled.
+- **systemd-journald:** volatile journal with bounded runtime use.
+- **Apache:** redirects the global `APACHE_LOG_DIR` through `/etc/apache2/envvars`; virtual-host files are not edited.
+- **Nginx:** redirects configured access/error log directives in active configuration files and validates with `nginx -t`.
+- **PHP-FPM:** redirects configured FPM global error logs.
+- **PostgreSQL:** enables the logging collector and places its log directory under `/run` for online clusters.
+- **Mattermost:** enables file logging in the RAM directory while retaining console logging and existing log levels.
+- **rsyslog:** detects and preserves an existing RAM ruleset; it does not overwrite custom rules.
 
-The rsyslog destination is not rewritten by this release because rules vary across Debian/Ubuntu installations. Configure it through a future tested adapter; its configured RAM path must be included in `/etc/ramlog/ramlog.conf`.
+Runtime directories are created with systemd-tmpfiles. Configuration files changed by the manager are backed up under `/var/backups/ramlog-manager`. If a configuration validation or service restart fails, changed files are restored and affected services are restarted.
 
-`apply` requires root and refuses to proceed unless `/run` is a tmpfs/ramfs mount. It backs up the managed journald drop-in before changing it. It does not delete or truncate historical logs, change database settings, or stop application services.
+## Important limitations
+
+This is an initial adapter release, not a universal guarantee. LightDM/Xorg and arbitrary third-party applications are not reconfigured automatically yet. rsyslog rules are not rewritten if a RAM ruleset is absent or incomplete. Unsupported writers remain visible to `verify` and prevent a PASS.
+
+`verify` uses `lsof` to detect open persistent files under `/var/log`; install `lsof`. This is a practical process-level check, not a proof against every possible application writing elsewhere on persistent storage. Do not interpret a PASS as coverage of sources outside its detection scope.
+
+## Data preservation
+
+Historical files under `/var/log`, including historical journals, are not deleted or truncated. `export` archives only configured source directories whose filesystem is tmpfs/ramfs and writes a SHA-256 manifest. Unexpected power loss or kernel panic can lose logs still resident in RAM.
 
 ## Configuration
 
@@ -41,17 +50,4 @@ directory = /var/log/ramlog-archive
 paths = /run/log/journal,/run/rsyslog,/run/bjm-app-logs
 ```
 
-Only list verified RAM-backed log paths. Export refuses non-RAM sources.
-
-## Shutdown export
-
-The systemd unit invokes `ramlog export` before unmounting filesystems during orderly shutdown/reboot. Sudden power loss, kernel panic and forced reset can lose RAM logs. A successful manual export does not prove the shutdown hook has been exercised.
-
-## Verification
-
-A PASS is only as complete as the process visibility provided by `lsof`. Install `lsof` for process-level checks. This version detects open file descriptors under `/var/log`; it is not a universal syscall-level audit and cannot prove the absence of every possible persistent log writer.
-
-## Roadmap
-
-- 0.3: tested rsyslog adapter and service-specific adapters for Apache/Nginx/PHP-FPM/PostgreSQL/Mattermost.
-- 1.0: broader Debian/Ubuntu compatibility matrix, unattended-safe upgrade/rollback and comprehensive verification.
+The existing configuration is preserved by the installer.
