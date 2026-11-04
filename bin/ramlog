@@ -241,7 +241,7 @@ def configure_php_fpm():
                                    "error_log = /run/bjm-app-logs/php-fpm/php-fpm.log")
             changed |= set_text(cfg, transform)
     if changed:
-        RESTARTS.add("php8.4-fpm")
+        RESTARTS.add(f"php{cfg.parts[3]}-fpm")
     print("PHP-FPM: global error log redirected for installed FPM configurations.")
 
 def configure_postgresql():
@@ -291,10 +291,10 @@ def configure_lightdm():
     if not Path("/usr/sbin/lightdm").exists():
         return
     dropin = Path("/etc/lightdm/lightdm.conf.d/99-ramlog-manager.conf")
-    body = ("[LightDM]\\n"
-            "log-directory=/run/bjm-app-logs/lightdm\\n"
-            "[Seat:*]\\n"
-            "xserver-command=X -core -logfile /run/bjm-app-logs/lightdm/Xorg.0.log\\n")
+    body = ("[LightDM]\n"
+            "log-directory=/run/bjm-app-logs/lightdm\n"
+            "[Seat:*]\n"
+            "xserver-command=X -core -logfile /run/bjm-app-logs/lightdm/Xorg.0.log\n")
     record_write(dropin, body.encode(), 0o644)
     RESTARTS.add("lightdm")
     print("LightDM/Xorg: log directory and Xorg logfile redirected; restart ends active graphical sessions.")
