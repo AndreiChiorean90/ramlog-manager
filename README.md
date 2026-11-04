@@ -23,14 +23,14 @@ Run `apply` during a maintenance window. It may restart journald, rsyslog, Apach
 - **Nginx:** redirects configured access/error log directives in active configuration files and validates with `nginx -t`.
 - **PHP-FPM:** redirects configured FPM global error logs.
 - **PostgreSQL:** enables the logging collector and places its log directory under `/run` for online clusters.
-- **Mattermost:** enables file logging in the RAM directory while retaining console logging and existing log levels.
+- **Mattermost:** enables file logging in the RAM directory while retaining console logging and existing log levels.\n- **LightDM/Xorg:** configures the LightDM log directory and Xorg logfile under RAM; applying this adapter restarts LightDM and terminates active graphical sessions.
 - **rsyslog:** detects and preserves an existing RAM ruleset; it does not overwrite custom rules.
 
 Runtime directories are created with systemd-tmpfiles. Configuration files changed by the manager are backed up under `/var/backups/ramlog-manager`. If a configuration validation or service restart fails, changed files are restored and affected services are restarted.
 
 ## Important limitations
 
-This is an initial adapter release, not a universal guarantee. LightDM/Xorg and arbitrary third-party applications are not reconfigured automatically yet. rsyslog rules are not rewritten if a RAM ruleset is absent or incomplete. Unsupported writers remain visible to `verify` and prevent a PASS.
+This is an initial adapter release, not a universal guarantee. Arbitrary third-party applications are not reconfigured automatically yet. LightDM/Xorg support depends on the installed LightDM version honoring its log-directory and seat command settings; verify the resulting open file descriptors after applying. rsyslog rules are not rewritten if a RAM ruleset is absent or incomplete. Unsupported writers remain visible to `verify` and prevent a PASS.
 
 `verify` uses `lsof` to detect open persistent files under `/var/log`; install `lsof`. This is a practical process-level check, not a proof against every possible application writing elsewhere on persistent storage. Do not interpret a PASS as coverage of sources outside its detection scope.
 
