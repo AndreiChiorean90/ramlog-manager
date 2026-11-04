@@ -79,6 +79,8 @@ def backup(path):
         dest.symlink_to(os.readlink(path))
     else:
         shutil.copy2(path, dest)
+        st = path.stat()
+        os.chown(dest, st.st_uid, st.st_gid)
     return dest
 
 def record_write(path, data, mode=None):
@@ -97,7 +99,9 @@ def record_write(path, data, mode=None):
         if mode is not None:
             os.chmod(tmp, mode)
         elif path.exists():
-            os.chmod(tmp, path.stat().st_mode & 0o7777)
+            st = path.stat()
+            os.chmod(tmp, st.st_mode & 0o7777)
+            os.chown(tmp, st.st_uid, st.st_gid)
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
@@ -114,6 +118,7 @@ def rollback():
                 path.write_bytes(old)
                 if saved and saved.exists():
                     shutil.copystat(saved, path)
+                    os.chown(path, saved.stat().st_uid, saved.stat().st_gid)
         except OSError as exc:
             print(f"ROLLBACK ERROR {path}: {exc}", file=sys.stderr)
 
