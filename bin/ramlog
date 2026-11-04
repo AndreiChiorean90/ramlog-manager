@@ -8,6 +8,7 @@ import argparse
 import configparser
 import datetime as dt
 import hashlib
+import grp
 import json
 import os
 from pathlib import Path
@@ -136,6 +137,7 @@ def configure_runtime():
         "d /run/bjm-app-logs/php-fpm 0755 root root -",
         "d /run/bjm-app-logs/postgresql 0750 postgres postgres -",
         "d /run/bjm-app-logs/mattermost 0750 mattermost mattermost -",
+        "d /run/bjm-app-logs/lightdm 0755 root root -",
         "d /run/rsyslog 0750 syslog adm -",
         "",
     ])
@@ -239,9 +241,10 @@ def configure_php_fpm():
             def transform(t):
                 return ensure_line(t, r"^\s*error_log\s*=.*$",
                                    "error_log = /run/bjm-app-logs/php-fpm/php-fpm.log")
-            changed |= set_text(cfg, transform)
-    if changed:
-        RESTARTS.add(f"php{cfg.parts[3]}-fpm")
+            cfg_changed = set_text(cfg, transform)
+            changed |= cfg_changed
+            if cfg_changed:
+                RESTARTS.add(f"php{cfg.parts[3]}-fpm")
     print("PHP-FPM: global error log redirected for installed FPM configurations.")
 
 def configure_postgresql():
@@ -268,6 +271,7 @@ def configure_postgresql():
         if not re.search(r"(?m)^\s*include_dir\s*=\s*'conf.d'", text):
             record_write(cfg, (text.rstrip()+"\n\n# RAMLog Manager include\n"+include+"\n").encode())
         record_write(override, body.encode(), 0o640)
+        os.chown(override, 0, grp.getgrnam("postgres").gr_gid)
         RESTARTS.add(f"postgresql@{ver}-{cluster}")
         print(f"PostgreSQL {ver}/{cluster}: RAM log collector configured; restart required.")
 
@@ -279,7 +283,7 @@ def configure_mattermost():
         data = json.loads(cfg.read_text())
         settings = data.setdefault("LogSettings", {})
         settings["EnableFile"] = True
-        settings["FileLocation"] = "/run/bjm-app-logs/mattermost"
+        settings["FileLocation"] = "/run/bjm-app-logs/mattermost/mattermost.log"
         # Keep console logging and existing log levels/format unchanged.
         record_write(cfg, (json.dumps(data, indent="\t")+"\n").encode(), cfg.stat().st_mode & 0o777)
         RESTARTS.add("mattermost")
