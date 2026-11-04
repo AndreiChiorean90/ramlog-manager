@@ -11,6 +11,7 @@ import hashlib
 import grp
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import shutil
@@ -130,18 +131,27 @@ def ensure_line(text, pattern, line):
     return text.rstrip() + "\n" + line + "\n"
 
 def configure_runtime():
-    TMPFILES_CONTENT = "\n".join([
+    rules = [
         "d /run/bjm-app-logs 0755 root root -",
         "d /run/bjm-app-logs/apache2 0755 root root -",
         "d /run/bjm-app-logs/nginx 0755 root root -",
         "d /run/bjm-app-logs/php-fpm 0755 root root -",
-        "d /run/bjm-app-logs/postgresql 0750 postgres postgres -",
-        "d /run/bjm-app-logs/mattermost 0750 mattermost mattermost -",
         "d /run/bjm-app-logs/lightdm 0755 root root -",
-        "d /run/rsyslog 0750 syslog adm -",
-        "",
-    ])
-    record_write(TMPFILES, TMPFILES_CONTENT.encode(), 0o644)
+    ]
+    # Only reference service accounts that actually exist on this host.
+    for user, group, path in (
+        ("postgres", "postgres", "/run/bjm-app-logs/postgresql"),
+        ("mattermost", "mattermost", "/run/bjm-app-logs/mattermost"),
+        ("syslog", "adm", "/run/rsyslog"),
+    ):
+        try:
+            pwd.getpwnam(user)
+            grp.getgrnam(group)
+            rules.append(f"d {path} 0750 {user} {group} -")
+        except KeyError:
+            continue
+    rules.append("")
+    record_write(TMPFILES, "\\n".join(rules).encode(), 0o644)
     rc, out = run(["systemd-tmpfiles", "--create", str(TMPFILES)])
     if rc:
         raise RuntimeError("tmpfiles creation failed: " + out)
