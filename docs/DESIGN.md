@@ -1,41 +1,21 @@
-# Design and safety notes
+# RAMLog Manager 0.2.0 — design and safety
 
-## Policy model
+## Implemented adapter
 
-Every logging source must resolve to exactly one of:
-- `RAM`: active logging redirected to a verified tmpfs path and included in shutdown archive.
-- `DISABLED`: logging explicitly disabled because safe RAM redirection is unavailable.
+### systemd-journald
+- Requires /run to be mounted as tmpfs or ramfs.
+- Backs up the managed drop-in under /var/backups/ramlog-manager/<timestamp>/.
+- Writes Storage=volatile and bounded runtime usage.
+- Restarts systemd-journald and rolls back the drop-in if restart fails.
 
-Persistent active logging is never an accepted steady state.
+## Verification contract
 
-## Adapter contract (planned)
+The verifier checks runtime journal filesystem, configured source filesystems, archive destination writability, and open persistent files visible to lsof. Missing lsof is a verification failure, not a pass.
 
-An adapter must:
-1. identify the service and its active configuration;
-2. determine whether its log destination is persistent;
-3. back up every file it changes;
-4. configure a dedicated RAM destination (not a blanket `/var/log` mount);
-5. validate configuration before reload/restart;
-6. verify actual open file destinations after reload;
-7. register RAM paths for shutdown export;
-8. provide rollback;
-9. refuse to claim success if verification is inconclusive.
+## Not yet automated
 
-## Why v0.1 does not apply adapters
+rsyslog, Apache, Nginx, PHP-FPM, PostgreSQL, Mattermost, LightDM and Xorg require package- and installation-specific adapters. The tool must report these as remaining persistent writers rather than rewrite arbitrary configs or disable logging.
 
-Logging configuration is distribution-, package- and application-dependent. For example, PostgreSQL may write to stderr captured by journald even when `logging_collector=off`; Mattermost can log to console and files; rsyslog may create multiple files through distro-specific rules. A generic rewrite could silently lose diagnostics or disrupt production.
+## Data preservation
 
-## Archive ordering
-
-The shutdown unit is ordered before filesystem unmount. The archive command copies configured RAM paths into a persistent archive directory. This cannot protect against sudden power loss or a hard reset.
-
-## Verification still required
-
-A production-ready compliance verifier must inspect:
-- journald storage mode and active journal paths;
-- rsyslog rules and open file descriptors;
-- application-specific file destinations;
-- systemd unit stdout/stderr destinations;
-- kernel/audit logging;
-- tmpfs capacity and free space;
-- archive success and checksums.
+Historical files under /var/log are not removed, truncated, rotated, or rewritten. Export accepts only source paths whose filesystem is tmpfs or ramfs.
