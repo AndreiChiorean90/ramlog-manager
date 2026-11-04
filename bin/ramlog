@@ -315,6 +315,7 @@ def configure():
         configure_php_fpm()
         configure_postgresql()
         configure_mattermost()
+        configure_lightdm()
         # Validate configuration before service restarts.
         for cmd in (["apache2ctl", "-t"], ["nginx", "-t"], ["php-fpm8.4", "-t"]):
             if shutil.which(cmd[0]):
@@ -331,7 +332,8 @@ def configure():
         print(" - Nginx configured access/error destinations")
         print(" - PHP-FPM global error logs")
         print(" - PostgreSQL clusters with managed collector config")
-        print(" - Mattermost file log directory")\n        print(" - LightDM/Xorg log directory (if LightDM is installed)")
+        print(" - Mattermost file log directory")
+        print(" - LightDM/Xorg log directory (if LightDM is installed)")
         print(" - rsyslog existing RAM rules preserved (not rewritten)")
         if UNSUPPORTED:
             print("\nUNSUPPORTED / NEEDS ATTENTION:")
