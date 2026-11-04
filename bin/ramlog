@@ -151,7 +151,7 @@ def configure_runtime():
         except KeyError:
             continue
     rules.append("")
-    record_write(TMPFILES, "\\n".join(rules).encode(), 0o644)
+    record_write(TMPFILES, "\n".join(rules).encode(), 0o644)
     rc, out = run(["systemd-tmpfiles", "--create", str(TMPFILES)])
     if rc:
         raise RuntimeError("tmpfiles creation failed: " + out)
