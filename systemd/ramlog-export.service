@@ -1,0 +1,15 @@
+[Unit]
+Description=Archive RAM-resident logs before shutdown or reboot
+DefaultDependencies=no
+After=local-fs.target
+Before=umount.target shutdown.target
+Conflicts=shutdown.target
+ConditionPathExists=/etc/ramlog/ramlog.conf
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ramlog export
+TimeoutStartSec=5min
+
+[Install]
+WantedBy=shutdown.target
