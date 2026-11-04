@@ -220,7 +220,7 @@ def configure_nginx():
                     "access.log" if directive == "access_log" else "error.log")
                 suffix = " ".join(parts[1:])
                 return f"{indent}{directive} {target}" + (f" {suffix}" if suffix else "") + ";"
-            return re.sub(r"^(\\s*)(access_log|error_log)\\s+([^;]*);",
+            return re.sub(r"^(\s*)(access_log|error_log)\s+([^;]*);",
                           replace_directive, text, flags=re.M)
         if set_text(path, transform):
             changed_any = True
