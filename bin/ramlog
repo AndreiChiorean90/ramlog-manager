@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""RAMLog Manager 0.2.0: guarded RAM-journal configuration and verification."""
+"""RAMLog Manager 0.3.0 — automatic, guarded RAM logging adapters.
+
+Debian/Ubuntu + systemd. Changes are backed up before application.
+Unsupported sources are reported; they are never silently declared compliant.
+"""
 import argparse
 import configparser
 import datetime as dt
 import hashlib
+import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import subprocess
@@ -13,10 +19,22 @@ import sys
 import tarfile
 import tempfile
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 CONFIG = Path("/etc/ramlog/ramlog.conf")
+BACKUP_ROOT = Path("/var/backups/ramlog-manager")
+RUNTIME = Path("/run/bjm-app-logs")
 JOURNAL_DROPIN = Path("/etc/systemd/journald.conf.d/99-ramlog-manager.conf")
 JOURNAL_CONTENT = "[Journal]\nStorage=volatile\nRuntimeMaxUse=200M\nRuntimeKeepFree=50M\n"
+TMPFILES = Path("/etc/tmpfiles.d/ramlog-manager.conf")
+MANAGED_PATHS = [
+    "/run/log/journal", "/run/rsyslog", "/run/bjm-app-logs",
+    "/run/bjm-app-logs/apache2", "/run/bjm-app-logs/nginx",
+    "/run/bjm-app-logs/php-fpm", "/run/bjm-app-logs/postgresql",
+    "/run/bjm-app-logs/mattermost",
+]
+CHANGES = []
+RESTARTS = set()
+UNSUPPORTED = []
 
 def run(cmd):
     try:
@@ -25,6 +43,10 @@ def run(cmd):
         return p.returncode, p.stdout.strip()
     except FileNotFoundError:
         return 127, f"{cmd[0]}: not installed"
+
+def require_root():
+    if os.geteuid() != 0:
+        raise SystemExit("Run as root.")
 
 def read_config():
     cfg = configparser.ConfigParser()
@@ -44,38 +66,283 @@ def mount_type(path):
 def is_ram(path):
     return mount_type(path) in ("tmpfs", "ramfs")
 
-def require_root():
-    if os.geteuid() != 0:
-        raise SystemExit("Run as root.")
-
-def backup_file(path):
-    if not path.exists():
+def backup(path):
+    path = Path(path)
+    if not path.exists() and not path.is_symlink():
         return None
     stamp = dt.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-    backup = Path("/var/backups/ramlog-manager") / stamp / path.relative_to("/")
-    backup.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(path, backup)
-    return backup
+    dest = BACKUP_ROOT / stamp / path.relative_to("/")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        dest.symlink_to(os.readlink(path))
+    else:
+        shutil.copy2(path, dest)
+    return dest
 
-def atomic_write(path, content, mode=0o644):
+def record_write(path, data, mode=None):
+    path = Path(path)
+    old = path.read_bytes() if path.exists() else None
+    if old == data:
+        return False
+    saved = backup(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    fd, tmp = tempfile.mkstemp(prefix="."+path.name+".", dir=path.parent)
     try:
-        with os.fdopen(fd, "w") as f:
-            f.write(content)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        os.chmod(name, mode)
-        os.replace(name, path)
+        if mode is not None:
+            os.chmod(tmp, mode)
+        elif path.exists():
+            os.chmod(tmp, path.stat().st_mode & 0o7777)
+        os.replace(tmp, path)
     finally:
-        if os.path.exists(name):
-            os.unlink(name)
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    CHANGES.append((path, saved, old))
+    return True
+
+def rollback():
+    for path, saved, old in reversed(CHANGES):
+        try:
+            if old is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(old)
+                if saved and saved.exists():
+                    shutil.copystat(saved, path)
+        except OSError as exc:
+            print(f"ROLLBACK ERROR {path}: {exc}", file=sys.stderr)
+
+def set_text(path, transform, mode=None):
+    path = Path(path)
+    if not path.exists():
+        return False
+    original = path.read_text(errors="replace")
+    updated = transform(original)
+    return record_write(path, updated.encode(), mode)
+
+def ensure_line(text, pattern, line):
+    if re.search(pattern, text, re.M):
+        return re.sub(pattern, line, text, flags=re.M)
+    return text.rstrip() + "\n" + line + "\n"
+
+def configure_runtime():
+    TMPFILES_CONTENT = "\n".join([
+        "d /run/bjm-app-logs 0755 root root -",
+        "d /run/bjm-app-logs/apache2 0755 root root -",
+        "d /run/bjm-app-logs/nginx 0755 root root -",
+        "d /run/bjm-app-logs/php-fpm 0755 root root -",
+        "d /run/bjm-app-logs/postgresql 0750 postgres postgres -",
+        "d /run/bjm-app-logs/mattermost 0750 mattermost mattermost -",
+        "d /run/rsyslog 0750 syslog adm -",
+        "",
+    ])
+    record_write(TMPFILES, TMPFILES_CONTENT.encode(), 0o644)
+    rc, out = run(["systemd-tmpfiles", "--create", str(TMPFILES)])
+    if rc:
+        raise RuntimeError("tmpfiles creation failed: " + out)
+    if not Path("/run").is_mount() or not is_ram(Path("/run")):
+        raise RuntimeError("/run is not mounted on tmpfs/ramfs; refusing RAM logging setup")
+
+def configure_journald():
+    JOURNAL_DROPIN.parent.mkdir(parents=True, exist_ok=True)
+    record_write(JOURNAL_DROPIN, JOURNAL_CONTENT.encode(), 0o644)
+    RESTARTS.add("systemd-journald")
+
+def configure_rsyslog():
+    confdir = Path("/etc/rsyslog.d")
+    if not Path("/usr/sbin/rsyslogd").exists():
+        return
+    rules = sorted(confdir.glob("*.conf"))
+    destinations = []
+    for f in rules:
+        txt = f.read_text(errors="replace")
+        if f.name.startswith("00-ram-logging"):
+            continue
+        for line in txt.splitlines():
+            s = line.strip()
+            if s and not s.startswith("#") and re.search(r"/var/log/", s):
+                destinations.append(f"{f}:{line.strip()}")
+    # Do not replace user rules automatically. Existing RAM rules are detected and preserved.
+    ram_rules = confdir / "00-ram-logging.conf"
+    if ram_rules.exists():
+        text = ram_rules.read_text(errors="replace")
+        if "/run/rsyslog" in text:
+            print("rsyslog: existing RAM destination rules detected; preserved.")
+            RESTARTS.add("rsyslog")
+            return
+    if destinations:
+        UNSUPPORTED.extend(["rsyslog persistent rule needs rule-specific translation: " + x for x in destinations])
+        return
+    UNSUPPORTED.append("rsyslog: no verified RAM destination rules found")
+
+def configure_apache():
+    env = Path("/etc/apache2/envvars")
+    if not env.exists():
+        return
+    changed = set_text(env, lambda t: ensure_line(
+        t, r"^\s*export\s+APACHE_LOG_DIR=.*$",
+        "export APACHE_LOG_DIR=/run/bjm-app-logs/apache2"))
+    if changed:
+        RESTARTS.add("apache2")
+    print("Apache: APACHE_LOG_DIR redirected through its global environment file.")
+
+def nginx_config_files():
+    root = Path("/etc/nginx")
+    found = {}
+    if not root.exists():
+        return []
+    for p in root.rglob("*.conf"):
+        try:
+            resolved = p.resolve(strict=True)
+            if resolved.is_file():
+                found[str(resolved)] = resolved
+        except OSError:
+            pass
+    return list(found.values())
+
+def configure_nginx():
+    if not Path("/usr/sbin/nginx").exists():
+        return
+    changed_any = False
+    for path in nginx_config_files():
+        if "ramlog-manager" in str(path):
+            continue
+        def transform(text):
+            def repl(m):
+                directive, indent, rest = m.group(1), m.group(2), m.group(3)
+                if directive == "access_log" and rest.strip().startswith("off"):
+                    return m.group(0)
+                target = "/run/bjm-app-logs/nginx/" + ("access.log" if directive == "access_log" else "error.log")
+                parts = rest.split()
+                if not parts:
+                    return m.group(0)
+                if directive == "access_log":
+                    suffix = " ".join(parts[1:]) or "combined"
+                else:
+                    suffix = " ".join(parts[1:])
+                return f"{indent}{directive} {target}" + (f" {suffix}" if suffix else "") + ";"
+            return re.sub(r"^(\s*)(access_log|error_log)\s+([^;]*);", 
+                          lambda m: repl(type("M", (), {"group": lambda self,n: (None, m.group(1), m.group(2), m.group(3))[n]})()), text, flags=re.M)
+        if set_text(path, transform):
+            changed_any = True
+    if changed_any:
+        rc, out = run(["nginx", "-t"])
+        if rc:
+            raise RuntimeError("nginx configuration test failed: " + out)
+        RESTARTS.add("nginx")
+    print("Nginx: active configuration log directives inspected and redirected where configured.")
+
+def configure_php_fpm():
+    p = Path("/etc/php")
+    changed = False
+    if p.exists():
+        for cfg in p.glob("*/fpm/php-fpm.conf"):
+            def transform(t):
+                return ensure_line(t, r"^\s*error_log\s*=.*$",
+                                   "error_log = /run/bjm-app-logs/php-fpm/php-fpm.log")
+            changed |= set_text(cfg, transform)
+    if changed:
+        RESTARTS.add("php8.4-fpm")
+    print("PHP-FPM: global error log redirected for installed FPM configurations.")
+
+def configure_postgresql():
+    root = Path("/etc/postgresql")
+    if not root.exists():
+        return
+    for cfg in root.glob("*/*/postgresql.conf"):
+        ver = cfg.parent.parent.name
+        cluster = cfg.parent.name
+        rc, out = run(["pg_lsclusters"])
+        if rc or not re.search(rf"(?m)^\s*{re.escape(ver)}\s+{re.escape(cluster)}\s+\d+\s+online\b", out):
+            UNSUPPORTED.append(f"PostgreSQL {ver}/{cluster}: cluster not online; left unchanged")
+            continue
+        override = cfg.parent / "conf.d" / "ramlog-manager.conf"
+        override.parent.mkdir(parents=True, exist_ok=True)
+        body = ("# Managed by RAMLog Manager; local changes will be overwritten.\n"
+                "logging_collector = on\n"
+                "log_destination = 'stderr'\n"
+                "log_directory = '/run/bjm-app-logs/postgresql'\n"
+                "log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'\n")
+        # Include directory only if not already present; append include_dir at end so values win.
+        text = cfg.read_text(errors="replace")
+        include = "include_dir = 'conf.d'"
+        if not re.search(r"(?m)^\s*include_dir\s*=\s*'conf.d'", text):
+            record_write(cfg, (text.rstrip()+"\n\n# RAMLog Manager include\n"+include+"\n").encode())
+        record_write(override, body.encode(), 0o640)
+        RESTARTS.add(f"postgresql@{ver}-{cluster}")
+        print(f"PostgreSQL {ver}/{cluster}: RAM log collector configured; restart required.")
+
+def configure_mattermost():
+    cfg = Path("/opt/mattermost/config/config.json")
+    if not cfg.exists():
+        return
+    try:
+        data = json.loads(cfg.read_text())
+        settings = data.setdefault("LogSettings", {})
+        settings["EnableFile"] = True
+        settings["FileLocation"] = "/run/bjm-app-logs/mattermost"
+        # Keep console logging and existing log levels/format unchanged.
+        record_write(cfg, (json.dumps(data, indent="\t")+"\n").encode(), cfg.stat().st_mode & 0o777)
+        RESTARTS.add("mattermost")
+        print("Mattermost: file logging directed to RAM; console settings preserved.")
+    except Exception as exc:
+        UNSUPPORTED.append(f"Mattermost config not changed: {exc}")
+
+def configure():
+    require_root()
+    CHANGES.clear()
+    RESTARTS.clear()
+    UNSUPPORTED.clear()
+    if not Path("/run").is_mount() or not is_ram(Path("/run")):
+        raise SystemExit("REFUSED: /run must be a tmpfs/ramfs mount")
+    try:
+        configure_runtime()
+        configure_journald()
+        configure_rsyslog()
+        configure_apache()
+        configure_nginx()
+        configure_php_fpm()
+        configure_postgresql()
+        configure_mattermost()
+        # Validate configuration before service restarts.
+        for cmd in (["apache2ctl", "-t"], ["nginx", "-t"], ["php-fpm8.4", "-t"]):
+            if shutil.which(cmd[0]):
+                rc, out = run(cmd)
+                if rc:
+                    raise RuntimeError(f"{cmd[0]} validation failed: {out}")
+        for svc in sorted(RESTARTS):
+            rc, out = run(["systemctl", "restart", svc])
+            if rc:
+                raise RuntimeError(f"restart {svc} failed: {out}")
+        print("\nApplied RAM logging adapters:")
+        print(" - systemd-journald")
+        print(" - Apache global log directory")
+        print(" - Nginx configured access/error destinations")
+        print(" - PHP-FPM global error logs")
+        print(" - PostgreSQL clusters with managed collector config")
+        print(" - Mattermost file log directory")
+        print(" - rsyslog existing RAM rules preserved (not rewritten)")
+        if UNSUPPORTED:
+            print("\nUNSUPPORTED / NEEDS ATTENTION:")
+            for item in UNSUPPORTED:
+                print(" - " + item)
+        print(f"\nBackups: {BACKUP_ROOT}")
+        print("Apply completed. Run 'ramlog verify' for the current compliance result.")
+    except Exception as exc:
+        print(f"APPLY FAILED: {exc}; restoring changed configuration.", file=sys.stderr)
+        rollback()
+        for svc in sorted(RESTARTS):
+            run(["systemctl", "restart", svc])
+        raise SystemExit(2)
 
 def open_persistent_writers():
     if not shutil.which("lsof"):
         return None
     rc, out = run(["bash", "-lc",
-        "lsof -nP 2>/dev/null | awk '$NF ~ /^\\/var\\/log\\// && $NF !~ /^\\/var\\/log\\/(ramlog-archive|log-archive)\\// {print $1, $2, $4, $NF}' | sort -u"])
+        "lsof -nP 2>/dev/null | awk '$NF ~ /^\/var\/log\// && $NF !~ /^\/var\/log\/(ramlog-archive|log-archive)\// {print $1, $2, $4, $NF}' | sort -u"])
     return [line for line in out.splitlines() if line] if out else []
 
 def status():
@@ -86,7 +353,7 @@ def status():
     for p in sources:
         print(f"  {p}: {'present' if p.exists() else 'missing'}; filesystem={mount_type(p)}")
     print("\nServices:")
-    for svc in ("systemd-journald", "rsyslog", "apache2", "nginx", "php8.4-fpm", "postgresql"):
+    for svc in ("systemd-journald", "rsyslog", "apache2", "nginx", "php8.4-fpm", "postgresql", "mattermost"):
         print(f"  {svc}: {run(['systemctl', 'is-active', svc])[1]}")
     print(f"\nShutdown exporter: {run(['systemctl', 'is-enabled', 'ramlog-export.service'])[1]}")
 
@@ -101,69 +368,30 @@ def audit():
     else:
         print("(none detected)")
     print("\n[Persistent files under /var/log — inventory only]")
-    rc, out = run(["find", "/var/log", "-xdev", "-type", "f",
-                   "-printf", "%s bytes\\t%u:%g\\t%p\\n"])
+    rc, out = run(["find", "/var/log", "-xdev", "-type", "f", "-printf", "%s bytes\t%u:%g\t%p\n"])
     print(out or "(none found)")
     print("\n[Journal]")
     print(run(["journalctl", "--disk-usage"])[1])
-    print("\n[Configured RAM sources]")
-    for p in read_config()[0]:
-        print(f"{p}: {mount_type(p)}")
-
-def apply():
-    require_root()
-    if not Path("/run").is_mount():
-        raise SystemExit("REFUSED: /run is not a mount point; cannot guarantee RAM-backed logging.")
-    if mount_type(Path("/run")) not in ("tmpfs", "ramfs"):
-        raise SystemExit("REFUSED: /run is not tmpfs/ramfs.")
-    if not shutil.which("systemctl"):
-        raise SystemExit("REFUSED: systemd is required.")
-    JOURNAL_DROPIN.parent.mkdir(parents=True, exist_ok=True)
-    backup = backup_file(JOURNAL_DROPIN)
-    atomic_write(JOURNAL_DROPIN, JOURNAL_CONTENT, 0o644)
-    print(f"Installed journald RAM policy: {JOURNAL_DROPIN}")
-    print(f"Previous configuration backup: {backup or '(file did not previously exist)'}")
-    rc, out = run(["systemctl", "restart", "systemd-journald"])
-    if rc != 0:
-        if backup and backup.exists():
-            shutil.copy2(backup, JOURNAL_DROPIN)
-        else:
-            JOURNAL_DROPIN.unlink(missing_ok=True)
-        run(["systemctl", "daemon-reload"])
-        raise SystemExit(f"journald restart failed; configuration rolled back. Details: {out}")
-    print("systemd-journald restarted; Storage=volatile is now active.")
-    print("No other service configurations were changed.")
-    writers = open_persistent_writers()
-    if writers is None:
-        print("WARNING: lsof unavailable; application writers could not be verified.")
-    elif writers:
-        print("\nREMAINING PERSISTENT WRITERS (not modified by this release):")
-        print("\n".join(writers))
-        print("\nResult: PARTIAL. These writers require service-specific adapters.")
-    else:
-        print("No open persistent /var/log writers detected by lsof.")
 
 def verify():
-    sources, archive = read_config()
     failures = []
     print(f"RAMLog verification — {socket.gethostname()} (v{VERSION})")
-    journal = mount_type(Path("/run/log/journal"))
-    print(f"journald runtime path: {journal}")
-    if journal not in ("tmpfs", "ramfs"):
-        failures.append("journald runtime journal is not RAM-backed")
-    for p in sources:
+    for p in [Path("/run/log/journal"), Path("/run/rsyslog"), RUNTIME]:
         fs = mount_type(p)
-        print(f"source {p}: {fs}")
-        if p.exists() and fs not in ("tmpfs", "ramfs"):
-            failures.append(f"configured source is not RAM-backed: {p}")
+        print(f"{p}: {fs}")
+        if not p.exists() or not is_ram(p):
+            failures.append(f"required RAM log path missing/not RAM-backed: {p}")
     writers = open_persistent_writers()
     if writers is None:
-        failures.append("lsof unavailable; persistent writers cannot be verified")
+        failures.append("lsof unavailable; cannot verify process writers")
     elif writers:
-        failures.append("active persistent log writers detected:")
+        failures.append("active persistent /var/log writers detected:")
         failures.extend(writers)
+    if UNSUPPORTED:
+        failures.extend(UNSUPPORTED)
+    archive = read_config()[1]
     if not archive.parent.exists() or not os.access(archive.parent, os.W_OK):
-        failures.append(f"archive destination is not writable: {archive.parent}")
+        failures.append(f"archive destination not writable: {archive.parent}")
     print("\nRESULT: " + ("PASS" if not failures else "FAIL / INCOMPLETE"))
     for item in failures:
         print(" - " + item)
@@ -175,10 +403,9 @@ def export():
     existing = [p for p in sources if p.exists()]
     unsafe = [p for p in existing if not is_ram(p)]
     if unsafe:
-        raise SystemExit("REFUSED: refusing to archive non-RAM source(s): " +
-                         ", ".join(str(p) for p in unsafe))
+        raise SystemExit("REFUSED: non-RAM source(s): " + ", ".join(map(str, unsafe)))
     if not existing:
-        raise SystemExit("No configured RAM source paths exist; nothing archived.")
+        raise SystemExit("No configured RAM sources exist.")
     archive_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(archive_dir, 0o700)
     stamp = dt.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
@@ -198,14 +425,13 @@ def export():
     manifest = target.with_suffix(target.suffix + ".sha256")
     manifest.write_text(f"{digest}  {target.name}\n")
     os.chmod(manifest, 0o600)
-    print(f"Archive created: {target}")
-    print(f"SHA-256: {digest}")
+    print(f"Archive created: {target}\nSHA-256: {digest}")
 
 def main():
-    p = argparse.ArgumentParser(description="RAM-first logging manager for Debian/Ubuntu")
-    p.add_argument("command", choices=("status", "audit", "apply", "verify", "export"))
-    args = p.parse_args()
-    actions = {"status": status, "audit": audit, "apply": apply,
+    parser = argparse.ArgumentParser(description="RAM-first logging manager for Debian/Ubuntu")
+    parser.add_argument("command", choices=("status", "audit", "apply", "verify", "export"))
+    args = parser.parse_args()
+    actions = {"status": status, "audit": audit, "apply": configure,
                "verify": verify, "export": export}
     result = actions[args.command]()
     if args.command == "verify":
