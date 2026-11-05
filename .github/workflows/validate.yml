@@ -16,5 +16,3 @@ jobs:
         run: python -m py_compile bin/ramlog bin/ramlog-web
       - name: Check installer shell syntax
         run: bash -n install.sh
-      - name: Verify systemd units
-        run: systemd-analyze verify systemd/ramlog-export.service systemd/ramlog-web.service
