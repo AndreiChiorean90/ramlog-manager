@@ -140,10 +140,20 @@ class Handler(BaseHTTPRequestHandler):
                                        "LANG": "C.UTF-8"})
             output = proc.stdout.strip() or "(no output)"
             if proc.returncode == 0:
-                self.send_page("Policy saved. RAMLog adapter exit code: 0\n\n" + output, True)
+                check = subprocess.run([RAMLOG, "verify"], text=True, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, timeout=120, check=False,
+                                       env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                                            "LANG": "C.UTF-8"})
+                verified = check.stdout.strip() or "(no verification output)"
+                if check.returncode == 0:
+                    self.send_page("Adapter completed and verification returned PASS.\\n\\n" +
+                                   output + "\\n\\n=== POST-APPLY VERIFICATION ===\\n" + verified, True)
+                else:
+                    self.send_page("Adapter ran, but verification is FAIL/INCOMPLETE. Do not treat this host as compliant.\\n\\n" +
+                                   output + "\\n\\n=== POST-APPLY VERIFICATION ===\\n" + verified, False, 500)
             else:
                 self.send_page("Policy saved, but adapter exited with code " + str(proc.returncode) +
-                               ". Review the output; configuration rollback is attempted by the CLI on failure.\n\n" +
+                               ". Review the output; configuration rollback is attempted by the CLI on failure.\\n\\n" +
                                output, False, 500)
         except subprocess.TimeoutExpired as exc:
             output = (exc.stdout or b"").decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
