@@ -332,7 +332,7 @@ def configure_logrotate():
 # Keep RAM usage bounded without touching persistent historical logs.
 /run/rsyslog/* /run/bjm-app-logs/apache2/*.log /run/bjm-app-logs/nginx/*.log /run/bjm-app-logs/php-fpm/*.log /run/bjm-app-logs/postgresql/*.log /run/bjm-app-logs/mattermost/*.log /run/bjm-app-logs/lightdm/*.log /run/bjm-app-logs/lightdm/Xorg*.log {
     daily
-    size 20M
+    maxsize 20M
     rotate 2
     missingok
     notifempty
