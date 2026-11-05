@@ -26,5 +26,5 @@ systemctl restart ramlog-web.service
 echo
 echo "RAMLog Manager 0.3.3 web controller installed."
 echo "Open http://SERVER-IP:7780/"
-echo "The web page currently saves selected per-source policy choices."
-echo "It does NOT yet activate service logging changes; no application services were changed."
+echo "The web Apply button runs the guarded RAM adapter for the all-sources-RAM policy."
+echo "Mixed policies are saved but not activated in this build."
