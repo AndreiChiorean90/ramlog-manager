@@ -23,6 +23,7 @@ ReadWritePaths=/etc/postgresql
 ReadWritePaths=/etc/rsyslog.d
 ReadWritePaths=/etc/lightdm
 ReadWritePaths=/var/backups
+ReadWritePaths=/var/log/ramlog-archive
 ReadWritePaths=/run
 ReadWritePaths=/opt/mattermost/config
 ProtectHome=true
