@@ -467,7 +467,8 @@ def configure():
         print(f"APPLY FAILED: {exc}; restoring changed configuration.", file=sys.stderr)
         rollback()
         for svc in sorted(RESTARTS):
-            run(["systemctl", "restart", svc])
+            if restart_states.get(svc) == "active":
+                run(["systemctl", "restart", svc])
         raise SystemExit(2)
 
 
@@ -524,9 +525,10 @@ def apply_selected(sources, confirm_disruptive=False):
                     raise RuntimeError(f"{cmd[0]} validation failed: {out}")
         if UNSUPPORTED:
             raise RuntimeError("unsupported logging sources: " + "; ".join(UNSUPPORTED))
+        restart_states = {svc: run(["systemctl", "is-active", svc])[1] for svc in RESTARTS}
         restarted = []
         for svc in sorted(RESTARTS):
-            active = run(["systemctl", "is-active", svc])[1]
+            active = restart_states[svc]
             if active != "active":
                 print(f"RESTART DEFERRED: {svc} is {active}; it was not started automatically.")
                 continue
