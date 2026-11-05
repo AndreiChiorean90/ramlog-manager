@@ -21,7 +21,8 @@ install -m 0644 "$ROOT/systemd/ramlog-export.service" /etc/systemd/system/ramlog
 install -m 0644 "$ROOT/systemd/ramlog-web.service" /etc/systemd/system/ramlog-web.service
 systemctl daemon-reload
 systemctl enable ramlog-export.service
-systemctl enable --now ramlog-web.service
+systemctl enable ramlog-web.service
+systemctl restart ramlog-web.service
 echo
 echo "RAMLog Manager 0.3.3 web controller installed."
 echo "Open http://SERVER-IP:7780/"
