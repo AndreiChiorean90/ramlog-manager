@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RAMLog Manager 0.3.7 — guarded, source-scoped RAM logging adapters.
+"""RAMLog Manager 0.3.8 — guarded, source-scoped RAM logging adapters.
 
 Debian/Ubuntu + systemd. Changes are backed up before application.
 Unsupported sources are reported; they are never silently declared compliant.
