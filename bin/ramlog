@@ -616,7 +616,7 @@ def verify():
                 failures.append(item)
     mm_findings = mattermost_verification()
     if mm_findings:
-        print("\\n[Mattermost logging verification]")
+        print("\n[Mattermost logging verification]")
         for item in mm_findings:
             print(" - " + item)
             if "has RAM log file open:" not in item and "not installed; skipped" not in item:
