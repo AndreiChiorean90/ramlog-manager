@@ -408,11 +408,37 @@ def configure():
         raise SystemExit(2)
 
 def open_persistent_writers():
+    """Return unique process/PID/FD/path tuples for open persistent log files."""
     if not shutil.which("lsof"):
         return None
-    rc, out = run(["bash", "-lc",
-        "lsof -nP 2>/dev/null | awk 'index($NF, \"/var/log/\")==1 && index($NF, \"/var/log/ramlog-archive/\")!=1 && index($NF, \"/var/log/log-archive/\")!=1 {print $1, $2, $4, $NF}' | sort -u"])
-    return [line for line in out.splitlines() if line] if out else []
+    rc, out = run(["lsof", "-nP", "-w", "-Fpcfn"])
+    if rc and not out:
+        return []
+    current_pid = current_command = current_fd = None
+    found = {}
+    for line in out.splitlines():
+        if not line:
+            continue
+        kind, value = line[0], line[1:]
+        if kind == "p":
+            current_pid, current_command, current_fd = value, None, None
+        elif kind == "c":
+            current_command = value
+        elif kind == "f":
+            current_fd = value
+        elif kind == "n" and current_pid and current_fd:
+            name = value
+            if (name.startswith("/var/log/")
+                    and not name.startswith("/var/log/ramlog-archive/")
+                    and not name.startswith("/var/log/log-archive/")):
+                key = (current_pid, current_fd, name)
+                if key not in found:
+                    try:
+                        command = Path("/proc") .joinpath(current_pid, "comm").read_text().strip()
+                    except OSError:
+                        command = current_command or "unknown"
+                    found[key] = f"{command} {current_pid} {current_fd} {name}"
+    return sorted(found.values())
 
 def postgresql_verification():
     """Report PostgreSQL's effective log settings and logger file descriptors."""
@@ -470,7 +496,8 @@ def postgresql_verification():
                     name = fields[-1]
                     if name.startswith("/var/log/") and "/var/log/ramlog-archive/" not in name:
                         paths.append(name)
-                    elif name.startswith("/run/") and ("/log/" in name or "/logs/" in name):
+                    elif (name.startswith(str(logdir).rstrip("/") + "/")
+                          and is_ram(logdir)):
                         ram_paths.append(name)
             if ram_paths:
                 for path in sorted(set(ram_paths)):
@@ -531,7 +558,7 @@ def verify():
         failures.extend(writers)
     pg_findings = postgresql_verification()
     if pg_findings:
-        print("\\n[PostgreSQL logging verification]")
+        print("\n[PostgreSQL logging verification]")
         for item in pg_findings:
             print(" - " + item)
             if "verification remains incomplete" in item or "NOT verified" in item or "unknown" in item or "not identified" in item or "cannot inspect" in item or "unavailable" in item or "no identifiable RAM log" in item:
