@@ -328,7 +328,7 @@ def mattermost_fix():
         settings = data.setdefault("LogSettings", {})
         settings["EnableFile"] = True
         settings["FileLocation"] = "/run/bjm-app-logs/mattermost"
-        updated = (json.dumps(data, indent="\\t") + "\\n").encode()
+        updated = (json.dumps(data, indent="\t") + "\n").encode()
         changed = record_write(cfg, updated, cfg.stat().st_mode & 0o777)
         if changed:
             rc, output = run(["systemctl", "restart", "mattermost"])
