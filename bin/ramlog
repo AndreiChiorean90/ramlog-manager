@@ -505,6 +505,7 @@ def apply_selected(sources, confirm_disruptive=False):
         "mattermost": configure_mattermost,
         "lightdm": configure_lightdm,
     }
+    restart_states = {}
     try:
         # Runtime directories are required by selected RAM adapters.
         # Rotation is a separate source and is not touched by selective Apply.
