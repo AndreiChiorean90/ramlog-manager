@@ -3,7 +3,6 @@ Description=Archive RAM-resident logs before shutdown or reboot
 DefaultDependencies=no
 After=local-fs.target
 Before=umount.target shutdown.target
-Conflicts=shutdown.target
 ConditionPathExists=/etc/ramlog/ramlog.conf
 
 [Service]
