@@ -450,7 +450,7 @@ def postgresql_verification():
         logger_pids = []
         if prc == 0:
             for proc_line in processes.splitlines():
-                pm = re.match(r"\s*(\d+)\s+.*postgres:\\s+" +
+                pm = re.match(r"\s*(\d+)\s+.*postgres:\s+" +
                               re.escape(ver + "/" + cluster) + r":\s+logger\b", proc_line)
                 if pm:
                     logger_pids.append(pm.group(1))
