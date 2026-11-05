@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RAMLog Manager web interface; applies only the explicitly supported all-RAM policy."""
+"""RAMLog Manager web interface with live log inventory and guarded actions."""
 import html
 import json
 import os
@@ -31,7 +31,27 @@ def load_policy():
     except (OSError, ValueError):
         return {}
 
-def page(message="", success=None):
+def scan_inventory():
+    if not Path(RAMLOG).is_file() or not os.access(RAMLOG, os.X_OK):
+        return "RAMLog CLI missing or not executable", False
+    proc = subprocess.run([RAMLOG, "inventory"], text=True, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, timeout=90, check=False,
+                          env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                               "LANG": "C.UTF-8"})
+    if proc.returncode:
+        return proc.stdout.strip() or "Inventory failed", False
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError:
+        return "Invalid inventory output:\\n" + proc.stdout, False
+    lines = [f"Inventory generated: {data.get('generated', 'unknown')}", ""]
+    for item in data.get("logs", []):
+        writers = ", ".join(f"PID {w['pid']} FD {w['fd']}" for w in item.get("writers", [])) or "no active writer identified"
+        lines.append(f"{item['state']:8} | {item['source']} | {item['path']} | {item.get('filesystem', 'unknown')} | {writers}")
+    lines.extend(["", data.get("note", "")])
+    return "\\n".join(lines), True
+
+def page(message="", success=None, scan_message=""):
     policy = load_policy()
     rows = []
     for name, path, key in CANDIDATES:
@@ -65,8 +85,11 @@ pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}}
 .status{{color:#52606d;font-size:13px}}
 </style></head><body><main><h1>RAMLog Manager</h1>
 <p class="status">Control panel · {PORT} · Host: {html.escape(os.uname().nodename)}</p>
+<form method="post" action="/scan"><button type="submit">Check current log status</button></form>
+<div class="note"><b>Live inventory:</b> the status check inspects active log file descriptors and classifies their backing filesystem. Explicitly disabled logging is shown only when configuration proves it; unknown sources are not guessed.</div>
 <div class="note"><b>Apply safety:</b> This build activates the existing guarded bulk RAM adapter only when all nine listed sources are selected and set to RAM. Mixed policies (HDD/Disabled or unchecked rows) are saved but not activated; they require per-source adapters that are not yet implemented. Review the execution output below after applying.</div>
 {result}
+<form method="post" action="/mattermost-fix"><button type="submit" onclick="return confirm('Correct Mattermost FileLocation and restart only Mattermost?')">Correct Mattermost RAM log path (restart Mattermost only)</button></form>
 <form method="post" action="/apply"><table><thead><tr><th>Select</th><th>Log source</th><th>Current path</th><th>Policy</th><th>Detection</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table><button type="submit">Save and apply RAM policy</button></form>
 <p class="status">This interface is unauthenticated HTTP. Keep TCP {PORT} restricted to the trusted management LAN; never expose it to the Internet.</p></main>
