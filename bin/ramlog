@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RAMLog Manager 0.3.8 — guarded, source-scoped RAM logging adapters.
+"""RAMLog Manager 0.3.9 — guarded, source-scoped RAM logging adapters.
 
 Debian/Ubuntu + systemd. Changes are backed up before application.
 Unsupported sources are reported; they are never silently declared compliant.
@@ -21,7 +21,7 @@ import sys
 import tarfile
 import tempfile
 
-VERSION = "0.3.8"
+VERSION = "0.3.9"
 CONFIG = Path("/etc/ramlog/ramlog.conf")
 BACKUP_ROOT = Path("/var/backups/ramlog-manager")
 RUNTIME = Path("/run/bjm-app-logs")
@@ -346,17 +346,26 @@ def mattermost_fix():
 
 def configure_lightdm():
     if not Path("/usr/sbin/lightdm").exists():
+        UNSUPPORTED.append("LightDM/Xorg selected, but LightDM is not installed")
         return
     dropin = Path("/etc/lightdm/lightdm.conf.d/99-ramlog-manager.conf")
     body = ("[LightDM]\n"
             "log-directory=/run/bjm-app-logs/lightdm\n"
             "[Seat:*]\n"
             "xserver-command=X -core -logfile /run/bjm-app-logs/lightdm/Xorg.0.log\n")
-    record_write(dropin, body.encode(), 0o644)
-    # Do not restart LightDM automatically: doing so terminates active GUI sessions.
-    # The config is staged for the next planned reboot; verify will still flag
-    # currently open persistent log descriptors until LightDM/Xorg are restarted.
-    print("LightDM/Xorg: RAM log paths staged; activation deferred until a planned reboot (no GUI session terminated).")
+    changed = record_write(dropin, body.encode(), 0o644)
+    # If the config is already staged, detect existing GUI processes that still
+    # hold persistent log files. A restart is then needed to activate the paths.
+    writers = open_persistent_writers()
+    pending = writers is not None and any(
+        re.search(r"\\b(?:lightdm|lightdm-greeter|lightdm-gtk-gre|Xorg)\\b", line)
+        and "/var/log/" in line for line in writers
+    )
+    if changed or pending:
+        RESTARTS.add("lightdm")
+        print("LightDM/Xorg: configuration staged; LightDM restart required to activate RAM paths.")
+    else:
+        print("LightDM/Xorg: RAM paths are configured and no persistent GUI log descriptors were detected.")
 
 def configure_logrotate():
     """Bound RAM log growth; copytruncate keeps writers on their RAM-backed inode."""
@@ -438,8 +447,8 @@ def configure():
         raise SystemExit(2)
 
 
-def apply_selected(sources):
-    """Apply only explicitly selected, changed sources; never run the bulk adapter."""
+def apply_selected(sources, confirm_disruptive=False):
+    """Apply selected sources; disruptive database/GUI restarts require explicit confirmation."""
     require_root()
     allowed = {"journal", "rsyslog", "apache2", "nginx", "php-fpm",
                "postgresql", "mattermost", "lightdm"}
@@ -449,6 +458,13 @@ def apply_selected(sources):
     invalid = sorted(set(selected) - allowed)
     if invalid:
         raise SystemExit("Unsupported source(s): " + ", ".join(invalid))
+    disruptive = sorted(set(selected) & {"postgresql", "lightdm"})
+    if disruptive and not confirm_disruptive:
+        raise SystemExit(
+            "REFUSED: explicit confirmation is required before restarting "
+            + ", ".join(disruptive)
+            + ". Re-run with --confirm-disruptive only during an approved maintenance window."
+        )
     CHANGES.clear()
     RESTARTS.clear()
     UNSUPPORTED.clear()
@@ -484,10 +500,22 @@ def apply_selected(sources):
                     raise RuntimeError(f"{cmd[0]} validation failed: {out}")
         if UNSUPPORTED:
             raise RuntimeError("unsupported logging sources: " + "; ".join(UNSUPPORTED))
+        restarted = []
         for svc in sorted(RESTARTS):
+            active = run(["systemctl", "is-active", svc])[1]
+            if active != "active":
+                print(f"RESTART DEFERRED: {svc} is {active}; it was not started automatically.")
+                continue
             rc, out = run(["systemctl", "restart", svc])
             if rc:
                 raise RuntimeError(f"restart {svc} failed: {out}")
+            restarted.append(svc)
+            if run(["systemctl", "is-active", svc])[1] != "active":
+                raise RuntimeError(f"{svc} restart command returned success but service is not active")
+        if restarted:
+            print("Services restarted and active: " + ", ".join(restarted))
+        if RESTARTS - set(restarted):
+            print("Services requiring activation later: " + ", ".join(sorted(RESTARTS - set(restarted))))
         if not CHANGES and not RESTARTS:
             print("Selected source configuration already matches the adapter; no service was restarted.")
         else:
@@ -845,11 +873,13 @@ def main():
     parser = argparse.ArgumentParser(description="RAM-first logging manager for Debian/Ubuntu")
     parser.add_argument("command", choices=("status", "audit", "inventory", "mattermost-fix", "apply-selected", "apply", "verify", "export"))
     parser.add_argument("--sources", nargs="+", default=[])
+    parser.add_argument("--confirm-disruptive", action="store_true",
+                        help="confirm PostgreSQL or LightDM restart during an approved maintenance window")
     args = parser.parse_args()
     actions = {"status": status, "audit": audit, "inventory": inventory, "mattermost-fix": mattermost_fix, "apply": configure,
                "verify": verify, "export": export}
     if args.command == "apply-selected":
-        result = apply_selected(args.sources)
+        result = apply_selected(args.sources, args.confirm_disruptive)
     else:
         result = actions[args.command]()
     if args.command == "verify":
