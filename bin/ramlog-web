@@ -100,21 +100,40 @@ def page(message="", success=None, scan_message=""):
                                   stderr=subprocess.DEVNULL, timeout=90, check=False)
             if proc.returncode == 0:
                 inventory = json.loads(proc.stdout)
-                process_map = {
-                    "journal": ("systemd-journal", "systemd-journald"),
-                    "rsyslog": ("rsyslogd", "rsyslog"),
-                    "apache2": ("apache2",),
-                    "nginx": ("nginx",),
-                    "php-fpm": ("php-fpm",),
-                    "postgresql": ("postgres",),
-                    "mattermost": ("mattermos", "mattermost"),
-                    "lightdm": ("lightdm",),
-                    "xorg": ("xorg",),
-                }
-                for key, names in process_map.items():
-                    states = {item["state"] for item in inventory.get("logs", [])
-                              if any(name in item.get("source", "").lower() for name in names)}
-                    live[key] = next(iter(states)) if len(states) == 1 else ("Mixed" if states else "Unknown")
+                def belongs(key, item):
+                    source = str(item.get("source", "")).strip().lower()
+                    path = str(item.get("path", ""))
+                    if key == "journal":
+                        return source in ("systemd-journal", "systemd-journald")
+                    if key == "rsyslog":
+                        return source == "rsyslogd"
+                    if key == "apache2":
+                        return source == "apache2"
+                    if key == "nginx":
+                        return source == "nginx" or path.startswith(("/run/bjm-app-logs/nginx/", "/var/log/nginx/"))
+                    if key == "php-fpm":
+                        return source.startswith("php-fpm")
+                    if key == "postgresql":
+                        return source == "postgres"
+                    if key == "mattermost":
+                        return source in ("mattermost", "mattermos")
+                    if key == "lightdm":
+                        return source in ("lightdm", "lightdm-greeter", "lightdm-gtk-gre")
+                    if key == "xorg":
+                        return source == "xorg"
+                    return False
+                for _, _, key in CANDIDATES:
+                    states = {str(item.get("state", "Unknown")) for item in inventory.get("logs", [])
+                              if belongs(key, item)}
+                    live[key] = (next(iter(states)) if len(states) == 1
+                                 else "Mixed" if len(states) > 1 else "Unknown")
+                if live.get("mattermost") == "Unknown":
+                    try:
+                        mm = json.loads(Path("/opt/mattermost/config/config.json").read_text())
+                        if not mm.get("LogSettings", {}).get("EnableFile", False):
+                            live["mattermost"] = "Disabled"
+                    except (OSError, ValueError):
+                        pass
         except (OSError, ValueError, subprocess.TimeoutExpired):
             pass
     rows = []
