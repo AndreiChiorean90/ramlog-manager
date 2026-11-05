@@ -93,11 +93,35 @@ def scan_inventory():
 
 def page(message="", success=None, scan_message=""):
     policy = load_policy()
+    live = {}
+    if Path(RAMLOG).is_file() and os.access(RAMLOG, os.X_OK):
+        try:
+            proc = subprocess.run([RAMLOG, "inventory"], text=True, stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, timeout=90, check=False)
+            if proc.returncode == 0:
+                inventory = json.loads(proc.stdout)
+                process_map = {
+                    "journal": ("systemd-journal", "systemd-journald"),
+                    "rsyslog": ("rsyslogd", "rsyslog"),
+                    "apache2": ("apache2",),
+                    "nginx": ("nginx",),
+                    "php-fpm": ("php-fpm",),
+                    "postgresql": ("postgres",),
+                    "mattermost": ("mattermos", "mattermost"),
+                    "lightdm": ("lightdm",),
+                    "xorg": ("xorg",),
+                }
+                for key, names in process_map.items():
+                    states = {item["state"] for item in inventory.get("logs", [])
+                              if any(name in item.get("source", "").lower() for name in names)}
+                    live[key] = next(iter(states)) if len(states) == 1 else ("Mixed" if states else "Unknown")
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
     rows = []
     for name, fallback, key in CANDIDATES:
         selected = policy.get(key, {})
         path = current_path(key, fallback)
-        observed = detected_mode(key, path)
+        observed = live.get(key, "Unknown")
         mode = observed if observed in ("Disabled", "RAM", "HDD") else selected.get("mode", "HDD")
         checked = "checked" if selected.get("selected", False) else ""
         rows.append(f"""
