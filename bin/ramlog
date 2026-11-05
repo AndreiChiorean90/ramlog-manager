@@ -323,6 +323,31 @@ def configure_lightdm():
     # currently open persistent log descriptors until LightDM/Xorg are restarted.
     print("LightDM/Xorg: RAM log paths staged; activation deferred until a planned reboot (no GUI session terminated).")
 
+def configure_logrotate():
+    """Bound RAM log growth; copytruncate keeps writers on their RAM-backed inode."""
+    if not shutil.which("logrotate"):
+        raise RuntimeError("logrotate is required to bound RAM log growth; install it before applying")
+    path = Path("/etc/logrotate.d/ramlog-manager")
+    body = """# Managed by RAMLog Manager. All paths below are RAM-backed under /run.
+# Keep RAM usage bounded without touching persistent historical logs.
+/run/rsyslog/* /run/bjm-app-logs/apache2/*.log /run/bjm-app-logs/nginx/*.log /run/bjm-app-logs/php-fpm/*.log /run/bjm-app-logs/postgresql/*.log /run/bjm-app-logs/mattermost/*.log /run/bjm-app-logs/lightdm/*.log /run/bjm-app-logs/lightdm/Xorg*.log {
+    daily
+    size 20M
+    rotate 2
+    missingok
+    notifempty
+    compress
+    delaycompress
+    dateext
+    copytruncate
+}
+"""
+    record_write(path, body.encode(), 0o644)
+    rc, out = run(["logrotate", "-d", "/etc/logrotate.conf"])
+    if rc:
+        raise RuntimeError("logrotate configuration validation failed: " + out)
+    print("logrotate: RAM log rotation configured (daily or 20 MiB, two rotations per file).")
+
 def configure():
     require_root()
     CHANGES.clear()
@@ -332,6 +357,7 @@ def configure():
         raise SystemExit("REFUSED: /run must be a tmpfs/ramfs mount")
     try:
         configure_runtime()
+        configure_logrotate()
         configure_journald()
         configure_rsyslog()
         configure_apache()
