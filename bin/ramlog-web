@@ -153,7 +153,7 @@ pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}}
 </style></head><body><main><h1>RAMLog Manager</h1>
 <p class="status">Control panel · {PORT} · Host: {html.escape(os.uname().nodename)}</p>
 <form method="post" action="/scan"><button type="submit">Check current log status</button></form>
-<div class="note"><b>Live inventory:</b> the status check inspects active log file descriptors and classifies their backing filesystem. Explicitly disabled logging is shown only when configuration proves it; unknown sources are not guessed.</div>
+<div class="note"><b>Live inventory:</b> the status check scans active file descriptors that look like log paths or use common log-file suffixes, then classifies their backing filesystem. Explicitly disabled logging is shown only when configuration proves it; unknown sources are not guessed.</div>
 <div class="note"><b>Apply safety:</b> This build activates the existing guarded bulk RAM adapter only when all nine listed sources are selected and set to RAM. Mixed policies (HDD/Disabled or unchecked rows) are saved but not activated; they require per-source adapters that are not yet implemented. Review the execution output below after applying.</div>
 {result}
 <form method="post" action="/mattermost-fix"><button type="submit" onclick="return confirm('Correct Mattermost FileLocation and restart only Mattermost?')">Correct Mattermost RAM log path (restart Mattermost only)</button></form>
