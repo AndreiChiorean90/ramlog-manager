@@ -293,9 +293,29 @@ def configure_postgresql():
         main_changed = record_write(cfg, updated.encode()) if updated != text else False
         override_changed = record_write(override, body.encode(), 0o640)
         os.chown(override, 0, grp.getgrnam("postgres").gr_gid)
+        service = f"postgresql@{ver}-{cluster}"
         if main_changed or override_changed:
-            RESTARTS.add(f"postgresql@{ver}-{cluster}")
+            RESTARTS.add(service)
             print(f"PostgreSQL {ver}/{cluster}: RAM log collector configured; restart required.")
+        else:
+            # A previous Apply may already have staged the configuration while
+            # the running logger still holds its old persistent file descriptor.
+            prc, processes = run(["ps", "-eo", "pid=,args="])
+            logger_pids = []
+            if prc == 0:
+                for proc_line in processes.splitlines():
+                    pm = re.match(r"\\s*(\\d+)\\s+.*postgres:\\s+" +
+                                  re.escape(ver + "/" + cluster) + r":\\s+logger\\b", proc_line)
+                    if pm:
+                        logger_pids.append(pm.group(1))
+            for pid in logger_pids:
+                lrc, opened = run(["lsof", "-nP", "-p", pid])
+                if lrc == 0 and any(
+                    "/var/log/postgresql/" in line for line in opened.splitlines()
+                ):
+                    RESTARTS.add(service)
+                    print(f"PostgreSQL {ver}/{cluster}: stale persistent logger descriptor detected; controlled restart required.")
+                    break
 
 def configure_mattermost():
     cfg = Path("/opt/mattermost/config/config.json")
@@ -357,10 +377,14 @@ def configure_lightdm():
     # If the config is already staged, detect existing GUI processes that still
     # hold persistent log files. A restart is then needed to activate the paths.
     writers = open_persistent_writers()
-    pending = writers is not None and any(
-        re.search(r"\\b(?:lightdm|lightdm-greeter|lightdm-gtk-gre|Xorg)\\b", line)
-        and "/var/log/" in line for line in writers
-    )
+    if writers is None:
+        UNSUPPORTED.append("LightDM/Xorg: lsof unavailable; cannot determine whether old persistent descriptors remain")
+        pending = False
+    else:
+        pending = any(
+            any(name in line.lower() for name in ("lightdm", "xorg"))
+            and "/var/log/" in line for line in writers
+        )
     if changed or pending:
         RESTARTS.add("lightdm")
         print("LightDM/Xorg: configuration staged; LightDM restart required to activate RAM paths.")
