@@ -1,37 +1,47 @@
 # RAMLog Manager
 
 **Target:** Debian and Ubuntu with systemd  
-**Web policy UI:** 0.3.2 (standalone Python standard-library HTTP server)
+**Web controller:** 0.3.3 (Python standard library)
 
-## Standalone web interface
+## Install
 
-Run `sudo ./install.sh`, then open:
-
-`http://SERVER-IP:7780/`
-
-The installer enables `ramlog-web.service`. The interface uses Python's standard library; it does not require Apache, Nginx, PHP, Node.js, Flask, or other packages. It listens on TCP port 7780.
-
-The page lists the initial known log-source candidates. Each row has a checkbox and a three-state policy: **Disabled**, **RAM**, or **HDD**. Changing a selector automatically checks its row. Apply saves only checked rows to `/etc/ramlog/policy.json`; unchecked rows are left unchanged.
-
-**Important: this first web-interface release is a policy editor, not yet a live logging controller.** Apply persists the desired policy but does not rewrite service configuration, stop logging, move active file descriptors, or restart services. No source is silently reported as changed. The live per-source adapter/activation engine is not implemented in this release.
-
-The web server currently binds to `0.0.0.0:7780` and has no authentication or TLS. Restrict access to a trusted management network using the host firewall; do not expose this port to the Internet.
-
-## Existing command-line tools
-
-The existing CLI remains installed:
+Run as root:
 
 ```bash
-sudo ramlog status
-sudo ramlog audit
-sudo ramlog verify
-sudo ramlog export
+chmod 755 install.sh
+./install.sh
 ```
 
-The legacy `ramlog apply` command is a bulk adapter operation from 0.3.1. It is separate from the web policy editor and should not be run as a substitute for per-source Apply.
+Open `http://SERVER-IP:7780/`. The installer updates the CLI and web controller and enables `ramlog-web.service`.
 
-## Data preservation
+## Current web Apply behavior — read before use
 
-Historical files under `/var/log`, including historical journals, are not deleted or truncated. RAM-resident logs are exported by the existing shutdown exporter to the configured archive directory. Unexpected power loss or kernel panic can lose logs still resident in RAM.
+The web interface persists the selected policy in `/etc/ramlog/policy.json`.
 
-Existing `/etc/ramlog/ramlog.conf` is preserved by the installer. The policy UI creates `/etc/ramlog/policy.json` only when Apply is used.
+This build connects the Apply button to the existing guarded `ramlog apply` adapter **only when all nine listed sources are checked and set to RAM**. In that exact case, the CLI attempts to configure RAM logging for journald, rsyslog, Apache, Nginx, PHP-FPM, PostgreSQL, Mattermost, and LightDM/Xorg. It validates Apache/Nginx/PHP-FPM configurations where available, backs up changed files under `/var/backups/ramlog-manager`, and attempts rollback if the adapter reports a failure. Service restarts may occur, including PostgreSQL and Mattermost. LightDM/Xorg activation is staged for the next planned reboot to avoid terminating active desktop sessions.
+
+**Mixed policies are not implemented yet.** If any row is unchecked or set to HDD/Disabled, the UI saves the policy but deliberately does not run the bulk adapter. It must not be interpreted as per-source HDD/Disabled enforcement.
+
+The bulk adapter is an initial host adapter, not proof of complete compliance on every Debian/Ubuntu system. After applying, inspect the execution output, run `ramlog verify`, and independently confirm that no active processes are writing logs to persistent storage. A PASS is meaningful only for the sources and processes actually detected by the host. Do not assume every application is covered merely because it appears in the interface.
+
+## CLI
+
+```bash
+ramlog status
+ramlog audit
+ramlog apply
+ramlog verify
+ramlog export
+```
+
+`ramlog apply` is the same guarded bulk adapter used by the web UI's all-RAM policy. Do not run it if you do not intend the service configuration changes and restarts described above.
+
+## Shutdown archive and data preservation
+
+The shutdown exporter archives the RAM paths listed in `/etc/ramlog/ramlog.conf` to `/var/log/ramlog-archive` and writes a SHA-256 manifest. Historical files under `/var/log` are not deleted or truncated. Unexpected power loss or kernel panic can lose logs still resident in RAM.
+
+The installer preserves an existing `/etc/ramlog/ramlog.conf`.
+
+## Network security
+
+The web server binds to `0.0.0.0:7780` and currently has no authentication or TLS. Restrict TCP 7780 to a trusted management network using the host firewall. Never expose it to the Internet.
