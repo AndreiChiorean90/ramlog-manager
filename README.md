@@ -1,7 +1,7 @@
 # RAMLog Manager
 
 **Target:** Debian and Ubuntu with systemd  
-**Web controller:** 0.3.6 (Python standard library)
+**Web controller:** 0.3.7 (Python standard library)
 
 ## Install
 
@@ -14,27 +14,16 @@ chmod 755 install.sh
 
 Open `http://SERVER-IP:7780/`. The installer updates the CLI and web controller and enables `ramlog-web.service`.
 
-## Live inventory and controlled actions\n\nThe web UI provides **Check current log status**, which inventories active file descriptors whose paths look like log locations or use common log-file suffixes, classifies their backing filesystem as RAM or HDD, and reports explicitly disabled Mattermost file logging only when configuration proves it. Unusual extensionless paths and remote/syslog destinations may require application-specific adapters. Missing files are not assumed to mean Disabled. This inventory is discovery evidence, not proof that every application log source has been found.\n\nA separate **Mattermost-only correction** action changes `LogSettings.FileLocation` to `/run/bjm-app-logs/mattermost`, backs up the configuration, and restarts only the Mattermost service. It refuses to run if Mattermost is not already active.\n\n## Current web Apply behavior — read before use
+## Live inventory and controlled actions\n\nThe web UI provides **Check current log status**, which inventories active file descriptors whose paths look like log locations or use common log-file suffixes, classifies their backing filesystem as RAM or HDD, and reports explicitly disabled Mattermost file logging only when configuration proves it. Unusual extensionless paths and remote/syslog destinations may require application-specific adapters. Missing files are not assumed to mean Disabled. This inventory is discovery evidence, not proof that every application log source has been found.\n\nA separate **Mattermost-only correction** action changes `LogSettings.FileLocation` to `/run/bjm-app-logs/mattermost`, backs up the configuration, and restarts only the Mattermost service. It refuses to run if Mattermost is not already active.\n\n## Change-aware, source-scoped Apply
 
-The web interface persists the selected policy in `/etc/ramlog/policy.json`.
+The web UI compares each source's live state with its saved target policy. RAM is the default target for a new source. A row is checked automatically only when its observed state is definitively HDD or Disabled and its target is RAM. Mixed and Unknown states are never auto-selected. An unchanged RAM source remains unchecked.
 
-This build connects the Apply button to the existing guarded `ramlog apply` adapter **only when all nine listed sources are checked and set to RAM**. In that exact case, the CLI attempts to configure RAM logging for journald, rsyslog, Apache, Nginx, PHP-FPM, PostgreSQL, Mattermost, and LightDM/Xorg. It also installs a logrotate policy for RAM-resident application logs (daily, or above 20 MiB, retaining every rotation until shutdown export). It validates Apache/Nginx/PHP-FPM and logrotate configurations where available, backs up changed files under `/var/backups/ramlog-manager`, and attempts rollback if the adapter reports a failure. Service restarts may occur, including PostgreSQL and Mattermost. LightDM/Xorg activation is staged for the next planned reboot to avoid terminating active desktop sessions.
+Apply passes only explicitly checked sources to the source-scoped CLI operation. It does not invoke the former all-sources bulk adapter. Each selected adapter writes managed configuration only when it differs and restarts only the service(s) whose configuration it actually changed. PostgreSQL is not selected or modified merely because other sources are selected; a Mixed PostgreSQL state remains unchecked unless an operator explicitly selects it.
 
-**Mixed policies are not implemented yet.** If any row is unchecked or set to HDD/Disabled, the UI saves the policy but deliberately does not run the bulk adapter. It must not be interpreted as per-source HDD/Disabled enforcement.
+The current adapters implement RAM targets only. Selecting HDD or Disabled saves the policy but does not apply those targets; those adapters are not implemented yet. Shared runtime directory and log-rotation prerequisites are idempotent. Review the output and run `ramlog verify`; FAIL/INCOMPLETE is not compliance.
 
-The bulk adapter is an initial host adapter, not proof of complete compliance on every Debian/Ubuntu system. After applying, inspect the execution output and the automatic post-apply `ramlog verify` report. Verification checks the `/run` backing filesystem, active persistent `/var/log` writers (when `lsof` is installed), logrotate configuration, and shutdown exporter enablement. Independently confirm that no active processes are writing logs to persistent storage. A PASS is meaningful only for the sources and processes actually detected by the host. Do not assume every application is covered merely because it appears in the interface.
+The state comparison is a live inventory, not an immutable historical snapshot. Active file-descriptor discovery can miss unusual extensionless paths and remote/syslog destinations. Mixed/Unknown are intentionally treated as requiring human review, not as permission to change a source. The legacy CLI command `ramlog apply` remains a bulk operation and must not be used for selective policy changes.
 
-## CLI
-
-```bash
-ramlog status
-ramlog audit
-ramlog apply
-ramlog verify
-ramlog export
-```
-
-`ramlog apply` is the same guarded bulk adapter used by the web UI's all-RAM policy. Do not run it if you do not intend the service configuration changes and restarts described above.
 
 ## Shutdown archive and data preservation
 
