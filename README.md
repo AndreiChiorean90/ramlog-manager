@@ -1,7 +1,7 @@
 # RAMLog Manager
 
 **Target:** Debian and Ubuntu with systemd  
-**Web controller:** 0.3.7 (Python standard library)
+**Web controller:** 0.3.8 (Python standard library)
 
 ## Install
 
@@ -16,11 +16,11 @@ Open `http://SERVER-IP:7780/`. The installer updates the CLI and web controller 
 
 ## Live inventory and controlled actions\n\nThe web UI provides **Check current log status**, which inventories active file descriptors whose paths look like log locations or use common log-file suffixes, classifies their backing filesystem as RAM or HDD, and reports explicitly disabled Mattermost file logging only when configuration proves it. Unusual extensionless paths and remote/syslog destinations may require application-specific adapters. Missing files are not assumed to mean Disabled. This inventory is discovery evidence, not proof that every application log source has been found.\n\nA separate **Mattermost-only correction** action changes `LogSettings.FileLocation` to `/run/bjm-app-logs/mattermost`, backs up the configuration, and restarts only the Mattermost service. It refuses to run if Mattermost is not already active.\n\n## Change-aware, source-scoped Apply
 
-The web UI compares each source's live state with its saved target policy. RAM is the default target for a new source. A row is checked automatically only when its observed state is definitively HDD or Disabled and its target is RAM. Mixed and Unknown states are never auto-selected. An unchanged RAM source remains unchecked.
+The web UI compares each source's live state with its saved target policy. RAM is the default target for a new source. A row is checked automatically only when its live inventory contains positively identified HDD log writers and its target is RAM. RAM, Mixed, Unknown, and sources with no active writer are never auto-selected. Source matching uses exact process identities and known destination paths rather than loose substring matches. An unchanged RAM source remains unchecked.
 
 Apply passes only explicitly checked sources to the source-scoped CLI operation. It does not invoke the former all-sources bulk adapter. Each selected adapter writes managed configuration only when it differs and restarts only the service(s) whose configuration it actually changed. PostgreSQL is not selected or modified merely because other sources are selected; a Mixed PostgreSQL state remains unchecked unless an operator explicitly selects it.
 
-The current adapters implement RAM targets only. Selecting HDD or Disabled saves the policy but does not apply those targets; those adapters are not implemented yet. Shared runtime directory and log-rotation prerequisites are idempotent. Review the output and run `ramlog verify`; FAIL/INCOMPLETE is not compliance.
+The current adapters implement RAM targets only. Selecting HDD or Disabled saves the policy but does not apply those targets; those adapters are not implemented yet. The selected adapters may ensure their shared runtime directories; logrotate is not modified by selective Apply. Review the output and run `ramlog verify`; FAIL/INCOMPLETE is not compliance.
 
 The state comparison is a live inventory, not an immutable historical snapshot. Active file-descriptor discovery can miss unusual extensionless paths and remote/syslog destinations. Mixed/Unknown are intentionally treated as requiring human review, not as permission to change a source. The legacy CLI command `ramlog apply` remains a bulk operation and must not be used for selective policy changes.
 
