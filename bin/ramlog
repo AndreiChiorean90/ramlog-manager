@@ -314,6 +314,36 @@ def configure_mattermost():
     except Exception as exc:
         UNSUPPORTED.append(f"Mattermost config not changed: {exc}")
 
+def mattermost_fix():
+    """Correct Mattermost's RAM log directory and restart only Mattermost."""
+    require_root()
+    cfg = Path("/opt/mattermost/config/config.json")
+    if not cfg.is_file():
+        raise SystemExit("Mattermost configuration not found; no changes made.")
+    active = run(["systemctl", "is-active", "mattermost"])[1]
+    if active != "active":
+        raise SystemExit(f"Mattermost is not active ({active}); refusing an automatic start/restart.")
+    try:
+        data = json.loads(cfg.read_text())
+        settings = data.setdefault("LogSettings", {})
+        settings["EnableFile"] = True
+        settings["FileLocation"] = "/run/bjm-app-logs/mattermost"
+        updated = (json.dumps(data, indent="\\t") + "\\n").encode()
+        changed = record_write(cfg, updated, cfg.stat().st_mode & 0o777)
+        if changed:
+            rc, output = run(["systemctl", "restart", "mattermost"])
+            if rc:
+                rollback()
+                run(["systemctl", "restart", "mattermost"])
+                raise RuntimeError("Mattermost restart failed; configuration rollback attempted: " + output)
+            print("Mattermost configuration corrected and only the Mattermost service restarted.")
+            print(f"Backup location: {BACKUP_ROOT}")
+        else:
+            print("Mattermost already has the expected RAM log directory; no restart required.")
+    except Exception as exc:
+        raise SystemExit(f"Mattermost-only correction failed: {exc}")
+
+
 def configure_lightdm():
     if not Path("/usr/sbin/lightdm").exists():
         return
@@ -565,6 +595,62 @@ def mattermost_verification():
         )
     return findings
 
+def inventory():
+    """Discover active log file descriptors and classify their backing filesystem."""
+    records = {}
+    if not shutil.which("lsof"):
+        payload = {"available": False, "error": "lsof is not installed", "logs": []}
+        print(json.dumps(payload, indent=2))
+        return
+    rc, out = run(["lsof", "-nP", "-w", "-Fpcfn"])
+    if rc and not out:
+        payload = {"available": False, "error": out or "lsof returned no inventory", "logs": []}
+        print(json.dumps(payload, indent=2))
+        return
+    pid = command = fd = None
+    for line in out.splitlines():
+        if not line:
+            continue
+        kind, value = line[0], line[1:]
+        if kind == "p":
+            pid, command, fd = value, "unknown", None
+        elif kind == "c":
+            command = value
+        elif kind == "f":
+            fd = value
+        elif kind == "n" and pid and fd:
+            path = value
+            if not path.startswith(("/var/log/", "/run/log/", "/run/rsyslog/", "/run/bjm-app-logs/")):
+                continue
+            p = Path(path)
+            if not p.exists() or not p.is_file():
+                continue
+            fs = mount_type(p)
+            state = "RAM" if fs in ("tmpfs", "ramfs") else "HDD"
+            key = (command, path, state)
+            item = records.setdefault(key, {"source": command, "path": path, "state": state,
+                                             "filesystem": fs, "writers": []})
+            writer = {"pid": pid, "fd": fd}
+            if writer not in item["writers"]:
+                item["writers"].append(writer)
+    logs = sorted(records.values(), key=lambda x: (x["source"], x["path"]))
+    # Add only explicitly disabled logging settings; absence of a file is not proof of disablement.
+    mm_cfg = Path("/opt/mattermost/config/config.json")
+    if mm_cfg.exists():
+        try:
+            mm = json.loads(mm_cfg.read_text()).get("LogSettings", {})
+            if not mm.get("EnableFile", False):
+                logs.append({"source": "Mattermost file logging", "path": str(mm_cfg),
+                             "state": "Disabled", "filesystem": "n/a", "writers": [],
+                             "evidence": "LogSettings.EnableFile=false"})
+        except Exception:
+            pass
+    payload = {"available": True, "generated": dt.datetime.now().astimezone().isoformat(),
+               "logs": logs,
+               "note": "Inventory covers active file descriptors under /var/log and managed /run log trees, plus explicit Mattermost file-logging disablement. It cannot infer every application's internal or remote logging destination."}
+    print(json.dumps(payload, indent=2))
+
+
 def status():
     sources, archive = read_config()
     print(f"RAMLog Manager {VERSION} — {socket.gethostname()}")
@@ -686,9 +772,9 @@ def export():
 
 def main():
     parser = argparse.ArgumentParser(description="RAM-first logging manager for Debian/Ubuntu")
-    parser.add_argument("command", choices=("status", "audit", "apply", "verify", "export"))
+    parser.add_argument("command", choices=("status", "audit", "inventory", "mattermost-fix", "apply", "verify", "export"))
     args = parser.parse_args()
-    actions = {"status": status, "audit": audit, "apply": configure,
+    actions = {"status": status, "audit": audit, "inventory": inventory, "mattermost-fix": mattermost_fix, "apply": configure,
                "verify": verify, "export": export}
     result = actions[args.command]()
     if args.command == "verify":
