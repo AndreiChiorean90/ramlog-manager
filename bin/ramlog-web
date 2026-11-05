@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RAMLog Manager web interface with live log inventory and guarded actions."""
+"""RAMLog Manager 0.3.7 web interface with change-aware, source-scoped actions."""
 import html
 import json
 import os
@@ -119,11 +119,16 @@ def page(message="", success=None, scan_message=""):
             pass
     rows = []
     for name, fallback, key in CANDIDATES:
-        selected = policy.get(key, {})
+        saved = policy.get(key, {})
         path = current_path(key, fallback)
         observed = live.get(key, "Unknown")
-        mode = observed if observed in ("Disabled", "RAM", "HDD") else selected.get("mode", "HDD")
-        checked = "checked" if selected.get("selected", False) else ""
+        # RAM is the default target for a new source. Auto-select only when
+        # the observed state is definitive and differs from the saved target.
+        mode = saved.get("mode", "RAM")
+        if mode not in ("Disabled", "RAM", "HDD"):
+            mode = "RAM"
+        changed = observed in ("Disabled", "RAM", "HDD") and observed != mode
+        checked = "checked" if changed else ""
         rows.append(f"""
         <tr>
           <td><input class="pick" type="checkbox" name="selected_{key}" value="1" {checked}></td>
@@ -154,10 +159,10 @@ pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}}
 <p class="status">Control panel · {PORT} · Host: {html.escape(os.uname().nodename)}</p>
 <form method="post" action="/scan"><button type="submit">Check current log status</button></form>
 <div class="note"><b>Live inventory:</b> the status check scans active file descriptors that look like log paths or use common log-file suffixes, then classifies their backing filesystem. Explicitly disabled logging is shown only when configuration proves it; unknown sources are not guessed.</div>
-<div class="note"><b>Apply safety:</b> This build activates the existing guarded bulk RAM adapter only when all nine listed sources are selected and set to RAM. Mixed policies (HDD/Disabled or unchecked rows) are saved but not activated; they require per-source adapters that are not yet implemented. Review the execution output below after applying.</div>
+<div class="note"><b>Apply safety:</b> Only rows whose detected state differs from the selected target are checked automatically. Mixed and Unknown states are never auto-selected. Apply invokes adapters only for rows you explicitly select; unchanged rows are not passed to an adapter. Each adapter writes only when its managed settings differ and restarts only services whose configuration it changed. Shared runtime-directory and log-rotation prerequisites are idempotent.</div>
 {result}
 <form method="post" action="/mattermost-fix"><button type="submit" onclick="return confirm('Correct Mattermost FileLocation and restart only Mattermost?')">Correct Mattermost RAM log path (restart Mattermost only)</button></form>
-<form method="post" action="/apply"><table><thead><tr><th>Select</th><th>Log source</th><th>Current path</th><th>Policy (pre-filled from live state)</th><th>Current state</th></tr></thead>
+<form method="post" action="/apply"><table><thead><tr><th>Change</th><th>Log source</th><th>Current path</th><th>Target policy</th><th>Initial/live state</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table><button type="submit">Save and apply RAM policy</button></form>
 <p class="status">This interface is unauthenticated HTTP. Keep TCP {PORT} restricted to the trusted management LAN; never expose it to the Internet.</p></main>
 <script>
@@ -221,16 +226,23 @@ class Handler(BaseHTTPRequestHandler):
             return
         form = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
         new_policy = load_policy()
-        selected_all_ram = True
+        selected_sources = []
+        source_keys = {
+            "journal": "journal", "rsyslog": "rsyslog", "apache2": "apache2",
+            "nginx": "nginx", "php-fpm": "php-fpm", "postgresql": "postgresql",
+            "mattermost": "mattermost", "lightdm": "lightdm", "xorg": "lightdm",
+        }
         for _, _, key in CANDIDATES:
             selected = form.get("selected_" + key, [""])[0] == "1"
-            mode = form.get("mode_" + key, ["HDD"])[0]
+            mode = form.get("mode_" + key, ["RAM"])[0]
             if mode not in ("Disabled", "RAM", "HDD"):
                 self.send_error(400, "Invalid policy value")
                 return
             new_policy[key] = {"selected": selected, "mode": mode}
-            if not selected or mode != "RAM":
-                selected_all_ram = False
+            if selected:
+                source = source_keys[key]
+                if source not in selected_sources:
+                    selected_sources.append(source)
 
         POLICY.parent.mkdir(parents=True, exist_ok=True)
         tmp = POLICY.with_suffix(".tmp")
@@ -238,17 +250,16 @@ class Handler(BaseHTTPRequestHandler):
         os.chmod(tmp, 0o600)
         os.replace(tmp, POLICY)
 
-        if not selected_all_ram:
+        if not selected_sources:
             self.send_page(
-                "Policy saved to /etc/ramlog/policy.json. NO service configuration was changed. "
-                "This release activates only the all-sources-RAM policy; mixed policies are not yet supported.",
-                False, 200)
+                "Policy saved. No sources were selected, so no service configuration was changed.",
+                True, 200)
             return
         if not Path(RAMLOG).is_file() or not os.access(RAMLOG, os.X_OK):
             self.send_page("Policy saved, but the RAMLog CLI is missing or not executable: " + RAMLOG, False, 500)
             return
         try:
-            proc = subprocess.run([RAMLOG, "apply"], text=True, stdout=subprocess.PIPE,
+            proc = subprocess.run([RAMLOG, "apply-selected", "--sources", *selected_sources], text=True, stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, timeout=300, check=False,
                                   env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                                        "LANG": "C.UTF-8"})
@@ -260,13 +271,13 @@ class Handler(BaseHTTPRequestHandler):
                                             "LANG": "C.UTF-8"})
                 verified = check.stdout.strip() or "(no verification output)"
                 if check.returncode == 0:
-                    self.send_page("Adapter completed and verification returned PASS.\\n\\n" +
+                    self.send_page("Selected-source adapter completed and verification returned PASS.\\n\\n" +
                                    output + "\\n\\n=== POST-APPLY VERIFICATION ===\\n" + verified, True)
                 else:
-                    self.send_page("Adapter ran, but verification is FAIL/INCOMPLETE. Do not treat this host as compliant.\\n\\n" +
+                    self.send_page("Selected-source adapter ran, but verification is FAIL/INCOMPLETE. Do not treat this host as compliant.\\n\\n" +
                                    output + "\\n\\n=== POST-APPLY VERIFICATION ===\\n" + verified, False, 500)
             else:
-                self.send_page("Policy saved, but adapter exited with code " + str(proc.returncode) +
+                self.send_page("Policy saved, but selected-source adapter exited with code " + str(proc.returncode) +
                                ". Review the output; configuration rollback is attempted by the CLI on failure.\\n\\n" +
                                output, False, 500)
         except subprocess.TimeoutExpired as exc:
