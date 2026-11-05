@@ -1,53 +1,37 @@
 # RAMLog Manager
 
 **Target:** Debian and Ubuntu with systemd  
-**Version:** 0.3.1 — automatic service adapters (initial compatibility release)
+**Web policy UI:** 0.3.2 (standalone Python standard-library HTTP server)
 
-RAMLog Manager configures supported logging services to use volatile storage under `/run`, preserves prior configuration backups, and exports configured RAM log sources during orderly shutdown.
+## Standalone web interface
 
-## Install and use
+Run `sudo ./install.sh`, then open:
+
+`http://SERVER-IP:7780/`
+
+The installer enables `ramlog-web.service`. The interface uses Python's standard library; it does not require Apache, Nginx, PHP, Node.js, Flask, or other packages. It listens on TCP port 7780.
+
+The page lists the initial known log-source candidates. Each row has a checkbox and a three-state policy: **Disabled**, **RAM**, or **HDD**. Changing a selector automatically checks its row. Apply saves only checked rows to `/etc/ramlog/policy.json`; unchecked rows are left unchanged.
+
+**Important: this first web-interface release is a policy editor, not yet a live logging controller.** Apply persists the desired policy but does not rewrite service configuration, stop logging, move active file descriptors, or restart services. No source is silently reported as changed. The live per-source adapter/activation engine is not implemented in this release.
+
+The web server currently binds to `0.0.0.0:7780` and has no authentication or TLS. Restrict access to a trusted management network using the host firewall; do not expose this port to the Internet.
+
+## Existing command-line tools
+
+The existing CLI remains installed:
 
 ```bash
-sudo ./install.sh
 sudo ramlog status
-sudo ramlog apply
+sudo ramlog audit
 sudo ramlog verify
+sudo ramlog export
 ```
 
-Run `apply` during a maintenance window. It may restart journald, rsyslog, Apache, Nginx, PHP-FPM, PostgreSQL clusters and Mattermost where their configuration changes. PostgreSQL restarts interrupt database connections.
-
-## Adapters in 0.3.1
-
-- **systemd-journald:** volatile journal with bounded runtime use.
-- **Apache:** redirects the global `APACHE_LOG_DIR` through `/etc/apache2/envvars`; virtual-host files are not edited.
-- **Nginx:** redirects configured access/error log directives in active configuration files and validates with `nginx -t`.
-- **PHP-FPM:** redirects configured FPM global error logs.
-- **PostgreSQL:** enables the logging collector and places its log directory under `/run` for online clusters.
-- **Mattermost:** enables file logging in the RAM directory while retaining console logging and existing log levels.\n- **LightDM/Xorg log paths are staged for the next planned reboot; the manager does not restart LightDM automatically.
-- **rsyslog:** detects and preserves an existing RAM ruleset; it does not overwrite custom rules.
-
-Runtime directories are created with systemd-tmpfiles. Configuration files changed by the manager are backed up under `/var/backups/ramlog-manager`. If a configuration validation or service restart fails, changed files are restored and affected services are restarted.
-
-## Important limitations
-
-This is an initial adapter release, not a universal guarantee. Arbitrary third-party applications are not reconfigured automatically yet. LightDM/Xorg log paths are staged for the next planned reboot; the manager does not restart LightDM automatically. rsyslog rules are not rewritten if a RAM ruleset is absent or incomplete. Unsupported writers remain visible to `verify` and prevent a PASS.
-
-`verify` uses `lsof` to detect open persistent files under `/var/log`; install `lsof`. This is a practical process-level check, not a proof against every possible application writing elsewhere on persistent storage. Do not interpret a PASS as coverage of sources outside its detection scope.
+The legacy `ramlog apply` command is a bulk adapter operation from 0.3.1. It is separate from the web policy editor and should not be run as a substitute for per-source Apply.
 
 ## Data preservation
 
-Historical files under `/var/log`, including historical journals, are not deleted or truncated. `export` archives only configured source directories whose filesystem is tmpfs/ramfs and writes a SHA-256 manifest. Unexpected power loss or kernel panic can lose logs still resident in RAM.
+Historical files under `/var/log`, including historical journals, are not deleted or truncated. RAM-resident logs are exported by the existing shutdown exporter to the configured archive directory. Unexpected power loss or kernel panic can lose logs still resident in RAM.
 
-## Configuration
-
-`/etc/ramlog/ramlog.conf`:
-
-```ini
-[archive]
-directory = /var/log/ramlog-archive
-
-[sources]
-paths = /run/log/journal,/run/rsyslog,/run/bjm-app-logs
-```
-
-The existing configuration is preserved by the installer.
+Existing `/etc/ramlog/ramlog.conf` is preserved by the installer. The policy UI creates `/etc/ramlog/policy.json` only when Apply is used.
