@@ -62,7 +62,7 @@ button{{margin-top:22px;padding:12px 25px;background:#175cd3;color:white;border:
 <tbody>{''.join(rows)}</tbody></table><button type="submit">Apply selected changes</button></form>
 <p class="status">Changing a policy automatically selects its row. Unchecked rows are not changed.</p></main>
 <script>
-document.querySelectorAll('select').forEach(s=>s.addEventListener('change',()=>{const row=s.closest('tr');row.querySelector('.pick').checked=true;}));
+document.querySelectorAll('select').forEach(s=>s.addEventListener('change',()=>{{const row=s.closest('tr');row.querySelector('.pick').checked=true;}}));
 </script></body></html>"""
 
 class Handler(BaseHTTPRequestHandler):
