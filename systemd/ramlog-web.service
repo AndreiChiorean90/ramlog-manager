@@ -10,7 +10,21 @@ User=root
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
+# The web process can write only to the specific configuration and backup
+# locations required by the RAMLog adapter. Do not grant the whole /etc tree.
 ReadWritePaths=/etc/ramlog
+ReadWritePaths=/etc/tmpfiles.d
+ReadWritePaths=/etc/systemd/journald.conf.d
+ReadWritePaths=/etc/logrotate.d
+ReadWritePaths=/etc/apache2
+ReadWritePaths=/etc/nginx
+ReadWritePaths=/etc/php
+ReadWritePaths=/etc/postgresql
+ReadWritePaths=/etc/rsyslog.d
+ReadWritePaths=/etc/lightdm
+ReadWritePaths=/var/backups/ramlog-manager
+ReadWritePaths=/run
+ReadWritePaths=/opt/mattermost/config
 ProtectHome=true
 
 [Install]
