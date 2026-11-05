@@ -175,7 +175,7 @@ def configure_rsyslog():
     confdir = Path("/etc/rsyslog.d")
     if not Path("/usr/sbin/rsyslogd").exists():
         return
-    rules = sorted(confdir.glob("*.conf"))
+    rules = [Path("/etc/rsyslog.conf")] + sorted(confdir.glob("*.conf"))
     destinations = []
     for f in rules:
         txt = f.read_text(errors="replace")
@@ -190,6 +190,9 @@ def configure_rsyslog():
     if ram_rules.exists():
         text = ram_rules.read_text(errors="replace")
         if "/run/rsyslog" in text:
+            if destinations:
+                UNSUPPORTED.extend(["rsyslog has additional persistent destination: " + x for x in destinations])
+                return
             print("rsyslog: existing RAM destination rules detected; preserved.")
             return
     if destinations:
