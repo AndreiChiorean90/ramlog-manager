@@ -376,7 +376,7 @@ def open_persistent_writers():
     if not shutil.which("lsof"):
         return None
     rc, out = run(["bash", "-lc",
-        "lsof -nP 2>/dev/null | awk '$NF ~ /^\/var\/log\// && $NF !~ /^\/var\/log\/(ramlog-archive|log-archive)\// {print $1, $2, $4, $NF}' | sort -u"])
+        "lsof -nP 2>/dev/null | awk 'index($NF, \"/var/log/\")==1 && index($NF, \"/var/log/ramlog-archive/\")!=1 && index($NF, \"/var/log/log-archive/\")!=1 {print $1, $2, $4, $NF}' | sort -u"])
     return [line for line in out.splitlines() if line] if out else []
 
 def status():
