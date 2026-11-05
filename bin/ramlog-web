@@ -175,10 +175,10 @@ button{{margin-top:22px;padding:12px 25px;background:#175cd3;color:white;border:
 pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}}
 .status{{color:#52606d;font-size:13px}}
 </style></head><body><main><h1>RAMLog Manager</h1>
-<p class="status">Control panel · {PORT} · Host: {html.escape(os.uname().nodename)}</p>
+<p class="status">RAMLog Manager 0.3.8 · Control panel · {PORT} · Host: {html.escape(os.uname().nodename)}</p>
 <form method="post" action="/scan"><button type="submit">Check current log status</button></form>
 <div class="note"><b>Live inventory:</b> the status check scans active file descriptors that look like log paths or use common log-file suffixes, then classifies their backing filesystem. Explicitly disabled logging is shown only when configuration proves it; unknown sources are not guessed.</div>
-<div class="note"><b>Apply safety:</b> Only rows whose detected state differs from the selected target are checked automatically. Mixed and Unknown states are never auto-selected. Apply invokes adapters only for rows you explicitly select; unchanged rows are not passed to an adapter. Each adapter writes only when its managed settings differ and restarts only services whose configuration it changed. Shared runtime-directory and log-rotation prerequisites are idempotent.</div>
+<div class="note"><b>Apply safety:</b> Only positively identified HDD sources are checked automatically when RAM is the target. RAM, Mixed, Unknown, and sources with no active writer are never auto-selected. Apply invokes adapters only for rows you explicitly select; unchanged rows are not passed to an adapter. Each adapter writes only when its managed settings differ and restarts only services whose configuration it changed. Shared runtime-directory and log-rotation prerequisites are idempotent.</div>
 {result}
 <form method="post" action="/mattermost-fix"><button type="submit" onclick="return confirm('Correct Mattermost FileLocation and restart only Mattermost?')">Correct Mattermost RAM log path (restart Mattermost only)</button></form>
 <form method="post" action="/apply"><table><thead><tr><th>Change</th><th>Log source</th><th>Current path</th><th>Target policy</th><th>Initial/live state</th></tr></thead>
