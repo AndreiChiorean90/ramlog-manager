@@ -24,7 +24,7 @@ systemctl enable ramlog-export.service
 systemctl enable ramlog-web.service
 systemctl restart ramlog-web.service
 echo
-echo "RAMLog Manager 0.3.5 web controller installed."
+echo "RAMLog Manager 0.3.6 web controller installed."
 echo "Open http://SERVER-IP:7780/"
 echo "The web Apply button runs the guarded RAM adapter for the all-sources-RAM policy."
 echo "Mixed policies are saved but not activated in this build."
