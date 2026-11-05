@@ -414,6 +414,71 @@ def open_persistent_writers():
         "lsof -nP 2>/dev/null | awk 'index($NF, \"/var/log/\")==1 && index($NF, \"/var/log/ramlog-archive/\")!=1 && index($NF, \"/var/log/log-archive/\")!=1 {print $1, $2, $4, $NF}' | sort -u"])
     return [line for line in out.splitlines() if line] if out else []
 
+def postgresql_verification():
+    """Report PostgreSQL's effective log settings and logger file descriptors."""
+    findings = []
+    rc, clusters = run(["pg_lsclusters"])
+    if rc:
+        return ["PostgreSQL status unavailable: " + clusters]
+    for line in clusters.splitlines():
+        m = re.match(r"^\s*(\d+)\s+(\S+)\s+(\d+)\s+(online)\s+", line)
+        if not m:
+            continue
+        ver, cluster, port, _ = m.groups()
+        cmd = ["runuser", "-u", "postgres", "--", "psql", "-XAt", "-p", port,
+               "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c",
+               "SELECT current_setting('logging_collector') || '|' || "
+               "current_setting('log_destination') || '|' || "
+               "current_setting('log_directory') || '|' || "
+               "current_setting('log_filename');"]
+        qrc, output = run(cmd)
+        rows = [x for x in output.splitlines() if "|" in x]
+        if qrc or not rows:
+            findings.append(f"PostgreSQL {ver}/{cluster}: effective logging settings unknown: {output}")
+            continue
+        collector, destination, directory, filename = rows[-1].split("|", 3)
+        logdir = Path(directory)
+        active_ram_config = collector == "on" and logdir.is_absolute() and str(logdir).startswith("/run/") and is_ram(logdir)
+        findings.append(
+            f"PostgreSQL {ver}/{cluster}: collector={collector}; destination={destination}; "
+            f"log_directory={directory}; RAM destination={'verified' if active_ram_config else 'NOT verified'}"
+        )
+        if not active_ram_config:
+            findings.append(f"PostgreSQL {ver}/{cluster}: effective configuration does not prove RAM logging")
+        # Locate the cluster's logger process and inspect its own open descriptors.
+        prc, processes = run(["ps", "-eo", "pid=,args="])
+        logger_pids = []
+        if prc == 0:
+            for proc_line in processes.splitlines():
+                pm = re.match(r"\s*(\d+)\s+.*postgres:\\s+" +
+                              re.escape(ver + "/" + cluster) + r":\\s+logger\\b", proc_line)
+                if pm:
+                    logger_pids.append(pm.group(1))
+        if not logger_pids:
+            findings.append(f"PostgreSQL {ver}/{cluster}: logger process not identified; active file destination unknown")
+            continue
+        for pid in logger_pids:
+            lrc, opened = run(["lsof", "-nP", "-p", pid])
+            if lrc and not opened:
+                findings.append(f"PostgreSQL {ver}/{cluster}: cannot inspect logger PID {pid} descriptors")
+                continue
+            paths = []
+            for opened_line in opened.splitlines()[1:]:
+                fields = opened_line.split()
+                if fields:
+                    name = fields[-1]
+                    if name.startswith("/var/log/") and "/var/log/ramlog-archive/" not in name:
+                        paths.append(name)
+            if paths:
+                for path in sorted(set(paths)):
+                    findings.append(
+                        f"PostgreSQL {ver}/{cluster}: logger PID {pid} still holds persistent log descriptor {path}; "
+                        "verification remains incomplete until a controlled restart closes it"
+                    )
+            else:
+                findings.append(f"PostgreSQL {ver}/{cluster}: logger PID {pid} has no detected persistent /var/log descriptor")
+    return findings
+
 def status():
     sources, archive = read_config()
     print(f"RAMLog Manager {VERSION} — {socket.gethostname()}")
@@ -454,8 +519,15 @@ def verify():
     if writers is None:
         failures.append("lsof unavailable; cannot verify process writers")
     elif writers:
-        failures.append("active persistent /var/log writers detected:")
+        failures.append("open persistent /var/log descriptors detected (some may be inherited/stale; they are not assumed harmless):")
         failures.extend(writers)
+    pg_findings = postgresql_verification()
+    if pg_findings:
+        print("\\n[PostgreSQL logging verification]")
+        for item in pg_findings:
+            print(" - " + item)
+            if "verification remains incomplete" in item or "NOT verified" in item or "unknown" in item or "not identified" in item or "cannot inspect" in item:
+                failures.append(item)
     if UNSUPPORTED:
         failures.extend(UNSUPPORTED)
     logrotate_conf = Path("/etc/logrotate.d/ramlog-manager")
