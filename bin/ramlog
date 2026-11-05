@@ -372,6 +372,8 @@ def configure():
                 rc, out = run(cmd)
                 if rc:
                     raise RuntimeError(f"{cmd[0]} validation failed: {out}")
+        if UNSUPPORTED:
+            raise RuntimeError("unsupported logging sources: " + "; ".join(UNSUPPORTED))
         for svc in sorted(RESTARTS):
             rc, out = run(["systemctl", "restart", svc])
             if rc:
