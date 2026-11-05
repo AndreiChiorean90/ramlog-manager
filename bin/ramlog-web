@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RAMLog Manager 0.3.7 web interface with change-aware, source-scoped actions."""
+"""RAMLog Manager 0.3.8 web interface with change-aware, source-scoped actions."""
 import html
 import json
 import os
