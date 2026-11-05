@@ -21,7 +21,7 @@ import sys
 import tarfile
 import tempfile
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 CONFIG = Path("/etc/ramlog/ramlog.conf")
 BACKUP_ROOT = Path("/var/backups/ramlog-manager")
 RUNTIME = Path("/run/bjm-app-logs")
@@ -101,6 +101,9 @@ def record_write(path, data, mode=None):
         elif path.exists():
             st = path.stat()
             os.chmod(tmp, st.st_mode & 0o7777)
+            os.chown(tmp, st.st_uid, st.st_gid)
+        if path.exists():
+            st = path.stat()
             os.chown(tmp, st.st_uid, st.st_gid)
         os.replace(tmp, path)
     finally:
@@ -315,8 +318,10 @@ def configure_lightdm():
             "[Seat:*]\n"
             "xserver-command=X -core -logfile /run/bjm-app-logs/lightdm/Xorg.0.log\n")
     record_write(dropin, body.encode(), 0o644)
-    RESTARTS.add("lightdm")
-    print("LightDM/Xorg: log directory and Xorg logfile redirected; restart ends active graphical sessions.")
+    # Do not restart LightDM automatically: doing so terminates active GUI sessions.
+    # The config is staged for the next planned reboot; verify will still flag
+    # currently open persistent log descriptors until LightDM/Xorg are restarted.
+    print("LightDM/Xorg: RAM log paths staged; activation deferred until a planned reboot (no GUI session terminated).")
 
 def configure():
     require_root()
@@ -352,7 +357,7 @@ def configure():
         print(" - PHP-FPM global error logs")
         print(" - PostgreSQL clusters with managed collector config")
         print(" - Mattermost file log directory")
-        print(" - LightDM/Xorg log directory (if LightDM is installed)")
+        print(" - LightDM/Xorg log paths staged for next planned reboot (not restarted)")
         print(" - rsyslog existing RAM rules preserved (not rewritten)")
         if UNSUPPORTED:
             print("\nUNSUPPORTED / NEEDS ATTENTION:")
