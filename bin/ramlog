@@ -367,7 +367,7 @@ def configure():
         configure_mattermost()
         configure_lightdm()
         # Validate configuration before service restarts.
-        for cmd in (["apache2ctl", "-t"], ["nginx", "-t"], ["php-fpm8.4", "-t"]):
+        for cmd in (["apache2ctl", "-t"], ["nginx", "-t"], ["php-fpm8.4", "-t"], ["rsyslogd", "-N1"]):
             if shutil.which(cmd[0]):
                 rc, out = run(cmd)
                 if rc:
