@@ -23,7 +23,7 @@ systemctl daemon-reload
 systemctl enable ramlog-export.service
 systemctl enable --now ramlog-web.service
 echo
-echo "RAMLog Manager 0.3.2 web policy interface installed."
+echo "RAMLog Manager 0.3.3 web controller installed."
 echo "Open http://SERVER-IP:7780/"
 echo "The web page currently saves selected per-source policy choices."
 echo "It does NOT yet activate service logging changes; no application services were changed."
