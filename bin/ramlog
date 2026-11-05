@@ -378,8 +378,11 @@ def configure_lightdm():
     # hold persistent log files. A restart is then needed to activate the paths.
     writers = open_persistent_writers()
     if writers is None:
-        UNSUPPORTED.append("LightDM/Xorg: lsof unavailable; cannot determine whether old persistent descriptors remain")
         pending = False
+        if not changed:
+            UNSUPPORTED.append(
+                "LightDM/Xorg: lsof unavailable; existing process descriptors cannot be checked, so restart need is unknown"
+            )
     else:
         pending = any(
             any(name in line.lower() for name in ("lightdm", "xorg"))
