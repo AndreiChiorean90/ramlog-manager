@@ -21,7 +21,7 @@ import sys
 import tarfile
 import tempfile
 
-VERSION = "0.3.5"
+VERSION = "0.3.6"
 CONFIG = Path("/etc/ramlog/ramlog.conf")
 BACKUP_ROOT = Path("/var/backups/ramlog-manager")
 RUNTIME = Path("/run/bjm-app-logs")
