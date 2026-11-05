@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RAMLog Manager 0.3.5 — guarded RAM logging adapters.
+"""RAMLog Manager 0.3.7 — guarded, source-scoped RAM logging adapters.
 
 Debian/Ubuntu + systemd. Changes are backed up before application.
 Unsupported sources are reported; they are never silently declared compliant.
@@ -437,6 +437,70 @@ def configure():
             run(["systemctl", "restart", svc])
         raise SystemExit(2)
 
+
+def apply_selected(sources):
+    """Apply only explicitly selected, changed sources; never run the bulk adapter."""
+    require_root()
+    allowed = {"journal", "rsyslog", "apache2", "nginx", "php-fpm",
+               "postgresql", "mattermost", "lightdm"}
+    selected = list(dict.fromkeys(sources))
+    if not selected:
+        raise SystemExit("No sources selected; no changes made.")
+    invalid = sorted(set(selected) - allowed)
+    if invalid:
+        raise SystemExit("Unsupported source(s): " + ", ".join(invalid))
+    CHANGES.clear()
+    RESTARTS.clear()
+    UNSUPPORTED.clear()
+    if not Path("/run").is_mount() or not is_ram(Path("/run")):
+        raise SystemExit("REFUSED: /run must be a tmpfs/ramfs mount")
+    adapters = {
+        "journal": configure_journald,
+        "rsyslog": configure_rsyslog,
+        "apache2": configure_apache,
+        "nginx": configure_nginx,
+        "php-fpm": configure_php_fpm,
+        "postgresql": configure_postgresql,
+        "mattermost": configure_mattermost,
+        "lightdm": configure_lightdm,
+    }
+    try:
+        # Shared runtime directories and rotation policy are idempotent prerequisites.
+        configure_runtime()
+        configure_logrotate()
+        for source in selected:
+            adapters[source]()
+        validations = {
+            "apache2": ["apache2ctl", "-t"],
+            "nginx": ["nginx", "-t"],
+            "php-fpm": ["php-fpm8.4", "-t"],
+            "rsyslog": ["rsyslogd", "-N1"],
+        }
+        for source in selected:
+            cmd = validations.get(source)
+            if cmd and shutil.which(cmd[0]):
+                rc, out = run(cmd)
+                if rc:
+                    raise RuntimeError(f"{cmd[0]} validation failed: {out}")
+        if UNSUPPORTED:
+            raise RuntimeError("unsupported logging sources: " + "; ".join(UNSUPPORTED))
+        for svc in sorted(RESTARTS):
+            rc, out = run(["systemctl", "restart", svc])
+            if rc:
+                raise RuntimeError(f"restart {svc} failed: {out}")
+        if not CHANGES and not RESTARTS:
+            print("Selected source configuration already matches the adapter; no service was restarted.")
+        else:
+            print("Applied only selected source(s): " + ", ".join(selected))
+        print("Changed files are backed up under " + str(BACKUP_ROOT))
+        print("Run 'ramlog verify' for the current compliance result.")
+    except Exception as exc:
+        print(f"SELECTED APPLY FAILED: {exc}; restoring files changed by this operation.", file=sys.stderr)
+        rollback()
+        for svc in sorted(RESTARTS):
+            run(["systemctl", "restart", svc])
+        raise SystemExit(2)
+
 def open_persistent_writers():
     """Return unique process/PID/FD/path tuples for open persistent log files."""
     if not shutil.which("lsof"):
@@ -779,11 +843,15 @@ def export():
 
 def main():
     parser = argparse.ArgumentParser(description="RAM-first logging manager for Debian/Ubuntu")
-    parser.add_argument("command", choices=("status", "audit", "inventory", "mattermost-fix", "apply", "verify", "export"))
+    parser.add_argument("command", choices=("status", "audit", "inventory", "mattermost-fix", "apply-selected", "apply", "verify", "export"))
+    parser.add_argument("--sources", nargs="+", default=[])
     args = parser.parse_args()
     actions = {"status": status, "audit": audit, "inventory": inventory, "mattermost-fix": mattermost_fix, "apply": configure,
                "verify": verify, "export": export}
-    result = actions[args.command]()
+    if args.command == "apply-selected":
+        result = apply_selected(args.sources)
+    else:
+        result = actions[args.command]()
     if args.command == "verify":
         raise SystemExit(result)
 
