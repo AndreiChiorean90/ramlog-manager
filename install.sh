@@ -18,7 +18,7 @@ install -m 0644 "$ROOT/systemd/ramlog-export.service" /etc/systemd/system/ramlog
 systemctl daemon-reload
 systemctl enable ramlog-export.service
 echo
-echo "RAMLog Manager 0.3.0 installed (Python syntax check passed)."
+echo "RAMLog Manager 0.3.1 installed (Python syntax check passed)."
 echo "Existing configuration preserved. No application services were changed."
 echo "Run: ramlog status"
 echo "Then, during a maintenance window, run: ramlog apply"
