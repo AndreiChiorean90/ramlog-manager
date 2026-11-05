@@ -620,7 +620,14 @@ def inventory():
             fd = value
         elif kind == "n" and pid and fd:
             path = value
-            if not path.startswith(("/var/log/", "/run/log/", "/run/rsyslog/", "/run/bjm-app-logs/")):
+            lower_path = path.lower()
+            log_suffix = any(lower_path.endswith(suffix) for suffix in
+                             (".log", ".out", ".err", ".journal", ".jsonl"))
+            log_location = (path.startswith(("/var/log/", "/run/log/", "/run/rsyslog/",
+                                             "/run/bjm-app-logs/"))
+                            or "/logs/" in lower_path or "/log/" in lower_path
+                            or log_suffix)
+            if not log_location:
                 continue
             p = Path(path)
             if not p.exists() or not p.is_file():
@@ -647,7 +654,7 @@ def inventory():
             pass
     payload = {"available": True, "generated": dt.datetime.now().astimezone().isoformat(),
                "logs": logs,
-               "note": "Inventory covers active file descriptors under /var/log and managed /run log trees, plus explicit Mattermost file-logging disablement. It cannot infer every application's internal or remote logging destination."}
+               "note": "Inventory scans active file descriptors whose paths appear to be log locations or use common log-file suffixes, plus explicit Mattermost file-logging disablement. Unusual extensionless log paths and remote/syslog destinations may still require application-specific adapters."}
     print(json.dumps(payload, indent=2))
 
 
