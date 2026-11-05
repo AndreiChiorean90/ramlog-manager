@@ -43,13 +43,13 @@ def scan_inventory():
     try:
         data = json.loads(proc.stdout)
     except ValueError:
-        return "Invalid inventory output:\\n" + proc.stdout, False
+        return "Invalid inventory output:\n" + proc.stdout, False
     lines = [f"Inventory generated: {data.get('generated', 'unknown')}", ""]
     for item in data.get("logs", []):
         writers = ", ".join(f"PID {w['pid']} FD {w['fd']}" for w in item.get("writers", [])) or "no active writer identified"
         lines.append(f"{item['state']:8} | {item['source']} | {item['path']} | {item.get('filesystem', 'unknown')} | {writers}")
     lines.extend(["", data.get("note", "")])
-    return "\\n".join(lines), True
+    return "\n".join(lines), True
 
 def page(message="", success=None, scan_message=""):
     policy = load_policy()
@@ -69,6 +69,8 @@ def page(message="", success=None, scan_message=""):
           <td>{'Detected' if exists else 'Not detected'}</td>
         </tr>""")
     result = ""
+    if scan_message:
+        result += f'<section class="result"><b>Live log inventory</b><pre>{html.escape(scan_message)}</pre></section>'
     if message:
         color = "#e8f5e9" if success else "#fff0f0"
         result = f'<section class="result" style="background:{color}"><b>{"Apply result" if success else "Apply not completed"}</b><pre>{html.escape(message)}</pre></section>'
@@ -114,6 +116,30 @@ class Handler(BaseHTTPRequestHandler):
         self.send_page()
 
     def do_POST(self):
+        if self.path == "/scan":
+            if os.geteuid() != 0:
+                self.send_error(403, "Run ramlog-web as root")
+                return
+            try:
+                message, ok = scan_inventory()
+                self.send_page(scan_message=message)
+            except subprocess.TimeoutExpired:
+                self.send_page(scan_message="Inventory timed out; no changes were made.")
+            return
+        if self.path == "/mattermost-fix":
+            if os.geteuid() != 0:
+                self.send_error(403, "Run ramlog-web as root")
+                return
+            try:
+                proc = subprocess.run([RAMLOG, "mattermost-fix"], text=True, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, timeout=180, check=False,
+                                      env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                                           "LANG": "C.UTF-8"})
+                self.send_page(proc.stdout.strip() or "(no output)", proc.returncode == 0,
+                               status=200 if proc.returncode == 0 else 500)
+            except subprocess.TimeoutExpired:
+                self.send_page("Mattermost-only action timed out. Inspect service state before retrying.", False, 504)
+            return
         if self.path != "/apply":
             self.send_error(404)
             return
