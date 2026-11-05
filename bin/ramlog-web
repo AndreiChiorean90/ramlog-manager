@@ -141,9 +141,9 @@ def page(message="", success=None, scan_message=""):
         saved = policy.get(key, {})
         path = current_path(key, fallback)
         observed = live.get(key, "Unknown")
-        # RAM is the default target for a new source. Auto-select only when
-        # the observed state is definitive and differs from the saved target.
-        mode = saved.get("mode", "RAM")
+        # Ignore legacy policy modes from pre-0.3.8: those modes were often
+        # copied from detected state, not chosen as the desired target.
+        mode = saved.get("mode", "RAM") if policy.get("_schema_version") == 2 else "RAM"
         if mode not in ("Disabled", "RAM", "HDD"):
             mode = "RAM"
         changed = (mode == "RAM" and observed == "HDD")
@@ -245,6 +245,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         form = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
         new_policy = load_policy()
+        new_policy["_schema_version"] = 2
         selected_sources = []
         unsupported_targets = []
         source_keys = {
