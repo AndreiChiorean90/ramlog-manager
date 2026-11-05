@@ -24,7 +24,7 @@ systemctl enable ramlog-export.service
 systemctl enable ramlog-web.service
 systemctl restart ramlog-web.service
 echo
-echo "RAMLog Manager 0.3.8 web controller installed."
+echo "RAMLog Manager 0.3.9 web controller installed."
 echo "Open http://SERVER-IP:7780/"
 echo "The web Apply button runs only explicitly selected source adapters."
 echo "Mixed and Unknown states are never selected automatically."
