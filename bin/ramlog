@@ -451,7 +451,7 @@ def postgresql_verification():
         if prc == 0:
             for proc_line in processes.splitlines():
                 pm = re.match(r"\s*(\d+)\s+.*postgres:\\s+" +
-                              re.escape(ver + "/" + cluster) + r":\\s+logger\\b", proc_line)
+                              re.escape(ver + "/" + cluster) + r":\s+logger\b", proc_line)
                 if pm:
                     logger_pids.append(pm.group(1))
         if not logger_pids:
@@ -459,16 +459,24 @@ def postgresql_verification():
             continue
         for pid in logger_pids:
             lrc, opened = run(["lsof", "-nP", "-p", pid])
-            if lrc and not opened:
-                findings.append(f"PostgreSQL {ver}/{cluster}: cannot inspect logger PID {pid} descriptors")
+            if lrc:
+                findings.append(f"PostgreSQL {ver}/{cluster}: cannot inspect logger PID {pid} descriptors: {opened}")
                 continue
             paths = []
+            ram_paths = []
             for opened_line in opened.splitlines()[1:]:
                 fields = opened_line.split()
                 if fields:
                     name = fields[-1]
                     if name.startswith("/var/log/") and "/var/log/ramlog-archive/" not in name:
                         paths.append(name)
+                    elif name.startswith("/run/") and ("/log/" in name or "/logs/" in name):
+                        ram_paths.append(name)
+            if ram_paths:
+                for path in sorted(set(ram_paths)):
+                    findings.append(f"PostgreSQL {ver}/{cluster}: logger PID {pid} has RAM log file open: {path}")
+            else:
+                findings.append(f"PostgreSQL {ver}/{cluster}: logger PID {pid} has no identifiable RAM log file descriptor")
             if paths:
                 for path in sorted(set(paths)):
                     findings.append(
@@ -526,7 +534,7 @@ def verify():
         print("\\n[PostgreSQL logging verification]")
         for item in pg_findings:
             print(" - " + item)
-            if "verification remains incomplete" in item or "NOT verified" in item or "unknown" in item or "not identified" in item or "cannot inspect" in item:
+            if "verification remains incomplete" in item or "NOT verified" in item or "unknown" in item or "not identified" in item or "cannot inspect" in item or "unavailable" in item or "no identifiable RAM log" in item:
                 failures.append(item)
     if UNSUPPORTED:
         failures.extend(UNSUPPORTED)
