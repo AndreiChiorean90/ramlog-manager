@@ -21,7 +21,7 @@ import sys
 import tarfile
 import tempfile
 
-VERSION = "0.3.3"
+VERSION = "0.3.4"
 CONFIG = Path("/etc/ramlog/ramlog.conf")
 BACKUP_ROOT = Path("/var/backups/ramlog-manager")
 RUNTIME = Path("/run/bjm-app-logs")
@@ -285,12 +285,12 @@ def configure_postgresql():
                 "log_destination = 'stderr'\n"
                 "log_directory = '/run/bjm-app-logs/postgresql'\n"
                 "log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'\n")
-        # Include directory only if not already present; append include_dir at end so values win.
+        # Include this exact managed file at the end of the main configuration.
+        # A pre-existing include_dir does not guarantee that this override wins.
         text = cfg.read_text(errors="replace")
-        include = "include_dir = 'conf.d'"
-        main_changed = False
-        if not re.search(r"(?m)^\s*include_dir\s*=\s*'conf.d'", text):
-            main_changed = record_write(cfg, (text.rstrip()+"\n\n# RAMLog Manager include\n"+include+"\n").encode())
+        include = "include_if_exists = 'conf.d/ramlog-manager.conf'"
+        updated = ensure_line(text, r"^\s*include_if_exists\s*=\s*'conf.d/ramlog-manager\.conf'\s*$", include)
+        main_changed = record_write(cfg, updated.encode()) if updated != text else False
         override_changed = record_write(override, body.encode(), 0o640)
         os.chown(override, 0, grp.getgrnam("postgres").gr_gid)
         if main_changed or override_changed:
@@ -397,6 +397,8 @@ def configure():
             for item in UNSUPPORTED:
                 print(" - " + item)
         print(f"\nBackups: {BACKUP_ROOT}")
+        print("Configuration stage completed. Some sources may still require activation or a planned reboot.")
+        print("Run ramlog verify; this host is NOT compliant unless verification returns PASS.")
         print("Apply completed. Run 'ramlog verify' for the current compliance result.")
     except Exception as exc:
         print(f"APPLY FAILED: {exc}; restoring changed configuration.", file=sys.stderr)
@@ -469,8 +471,19 @@ def verify():
     if exporter != "enabled":
         failures.append("shutdown RAM-log exporter is not enabled: " + exporter)
     archive = read_config()[1]
-    if not archive.parent.exists() or not os.access(archive.parent, os.W_OK):
-        failures.append(f"archive destination not writable: {archive.parent}")
+    # Test the configured archive directory itself, not merely its parent.
+    # Verification does not create or alter the archive directory.
+    if not archive.exists():
+        failures.append(f"archive destination does not exist: {archive}")
+    elif not archive.is_dir():
+        failures.append(f"archive destination is not a directory: {archive}")
+    else:
+        try:
+            fd, probe = tempfile.mkstemp(prefix=".ramlog-write-test-", dir=str(archive))
+            os.close(fd)
+            os.unlink(probe)
+        except OSError as exc:
+            failures.append(f"archive destination not writable: {archive}: {exc}")
     print("\nRESULT: " + ("PASS" if not failures else "FAIL / INCOMPLETE"))
     for item in failures:
         print(" - " + item)
