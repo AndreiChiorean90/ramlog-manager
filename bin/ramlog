@@ -285,11 +285,12 @@ def configure_postgresql():
         # Include directory only if not already present; append include_dir at end so values win.
         text = cfg.read_text(errors="replace")
         include = "include_dir = 'conf.d'"
+        main_changed = False
         if not re.search(r"(?m)^\s*include_dir\s*=\s*'conf.d'", text):
-            record_write(cfg, (text.rstrip()+"\n\n# RAMLog Manager include\n"+include+"\n").encode())
+            main_changed = record_write(cfg, (text.rstrip()+"\n\n# RAMLog Manager include\n"+include+"\n").encode())
         override_changed = record_write(override, body.encode(), 0o640)
         os.chown(override, 0, grp.getgrnam("postgres").gr_gid)
-        if override_changed:
+        if main_changed or override_changed:
             RESTARTS.add(f"postgresql@{ver}-{cluster}")
             print(f"PostgreSQL {ver}/{cluster}: RAM log collector configured; restart required.")
 
