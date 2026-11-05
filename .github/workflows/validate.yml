@@ -5,12 +5,14 @@ on:
   pull_request:
   workflow_dispatch:
 jobs:
-  python-syntax:
+  syntax-and-shell:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-      - name: Compile RAMLog Manager
-        run: python -m py_compile bin/ramlog
+      - name: Compile Python programs
+        run: python -m py_compile bin/ramlog bin/ramlog-web
+      - name: Check installer shell syntax
+        run: bash -n install.sh
