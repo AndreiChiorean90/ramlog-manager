@@ -127,7 +127,7 @@ def page(message="", success=None, scan_message=""):
         mode = saved.get("mode", "RAM")
         if mode not in ("Disabled", "RAM", "HDD"):
             mode = "RAM"
-        changed = mode == "RAM" and observed in ("Disabled", "HDD")
+        changed = (mode == "RAM" and observed == "HDD")
         checked = "checked" if changed else ""
         rows.append(f"""
         <tr>
