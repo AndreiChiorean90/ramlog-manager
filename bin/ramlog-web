@@ -127,7 +127,7 @@ def page(message="", success=None, scan_message=""):
         mode = saved.get("mode", "RAM")
         if mode not in ("Disabled", "RAM", "HDD"):
             mode = "RAM"
-        changed = observed in ("Disabled", "RAM", "HDD") and observed != mode
+        changed = mode == "RAM" and observed in ("Disabled", "HDD")
         checked = "checked" if changed else ""
         rows.append(f"""
         <tr>
@@ -227,6 +227,7 @@ class Handler(BaseHTTPRequestHandler):
         form = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
         new_policy = load_policy()
         selected_sources = []
+        unsupported_targets = []
         source_keys = {
             "journal": "journal", "rsyslog": "rsyslog", "apache2": "apache2",
             "nginx": "nginx", "php-fpm": "php-fpm", "postgresql": "postgresql",
@@ -240,9 +241,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             new_policy[key] = {"selected": selected, "mode": mode}
             if selected:
-                source = source_keys[key]
-                if source not in selected_sources:
-                    selected_sources.append(source)
+                if mode != "RAM":
+                    unsupported_targets.append(key + "=" + mode)
+                else:
+                    source = source_keys[key]
+                    if source not in selected_sources:
+                        selected_sources.append(source)
 
         POLICY.parent.mkdir(parents=True, exist_ok=True)
         tmp = POLICY.with_suffix(".tmp")
@@ -250,10 +254,15 @@ class Handler(BaseHTTPRequestHandler):
         os.chmod(tmp, 0o600)
         os.replace(tmp, POLICY)
 
+        if unsupported_targets:
+            self.send_page(
+                "Policy saved. The selected HDD/Disabled target(s) are not implemented by the current adapters: "
+                + ", ".join(unsupported_targets) + ". No service configuration was changed for those sources.",
+                False, 200)
         if not selected_sources:
             self.send_page(
-                "Policy saved. No sources were selected, so no service configuration was changed.",
-                True, 200)
+                "Policy saved. No supported RAM-target source was selected; no service configuration was changed.",
+                not unsupported_targets, 200)
             return
         if not Path(RAMLOG).is_file() or not os.access(RAMLOG, os.X_OK):
             self.send_page("Policy saved, but the RAMLog CLI is missing or not executable: " + RAMLOG, False, 500)
