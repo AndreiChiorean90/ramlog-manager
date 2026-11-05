@@ -304,10 +304,10 @@ def configure_postgresql():
             logger_pids = []
             if prc == 0:
                 for proc_line in processes.splitlines():
-                    pm = re.match(r"\\s*(\\d+)\\s+.*postgres:\\s+" +
-                                  re.escape(ver + "/" + cluster) + r":\\s+logger\\b", proc_line)
-                    if pm:
-                        logger_pids.append(pm.group(1))
+                    if f"postgres: {ver}/{cluster}: logger" in proc_line:
+                        pm = re.match(r"\s*(\d+)", proc_line)
+                        if pm:
+                            logger_pids.append(pm.group(1))
             for pid in logger_pids:
                 lrc, opened = run(["lsof", "-nP", "-p", pid])
                 if lrc == 0 and any(
