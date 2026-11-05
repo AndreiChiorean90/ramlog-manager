@@ -333,7 +333,7 @@ def configure_logrotate():
 /run/rsyslog/* /run/bjm-app-logs/apache2/*.log /run/bjm-app-logs/nginx/*.log /run/bjm-app-logs/php-fpm/*.log /run/bjm-app-logs/postgresql/*.log /run/bjm-app-logs/mattermost/*.log /run/bjm-app-logs/lightdm/*.log /run/bjm-app-logs/lightdm/Xorg*.log {
     daily
     maxsize 20M
-    rotate 2
+    rotate -1
     missingok
     notifempty
     compress
@@ -346,7 +346,7 @@ def configure_logrotate():
     rc, out = run(["logrotate", "-d", "/etc/logrotate.conf"])
     if rc:
         raise RuntimeError("logrotate configuration validation failed: " + out)
-    print("logrotate: RAM log rotation configured (daily or 20 MiB, two rotations per file).")
+    print("logrotate: RAM log rotation configured (daily or above 20 MiB; retain all rotations).")
 
 def configure():
     require_root()
