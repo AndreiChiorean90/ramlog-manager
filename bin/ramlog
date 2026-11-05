@@ -21,7 +21,7 @@ import sys
 import tarfile
 import tempfile
 
-VERSION = "0.3.7"
+VERSION = "0.3.8"
 CONFIG = Path("/etc/ramlog/ramlog.conf")
 BACKUP_ROOT = Path("/var/backups/ramlog-manager")
 RUNTIME = Path("/run/bjm-app-logs")
@@ -465,9 +465,9 @@ def apply_selected(sources):
         "lightdm": configure_lightdm,
     }
     try:
-        # Shared runtime directories and rotation policy are idempotent prerequisites.
+        # Runtime directories are required by selected RAM adapters.
+        # Rotation is a separate source and is not touched by selective Apply.
         configure_runtime()
-        configure_logrotate()
         for source in selected:
             adapters[source]()
         validations = {
