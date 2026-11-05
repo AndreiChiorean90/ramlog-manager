@@ -24,6 +24,46 @@ CANDIDATES = [
     ("Xorg", "/var/log/Xorg.0.log", "xorg"),
 ]
 
+CURRENT_PATHS = {
+    "journal": "/run/log/journal",
+    "rsyslog": "/run/rsyslog",
+    "apache2": "/run/bjm-app-logs/apache2",
+    "nginx": "/run/bjm-app-logs/nginx",
+    "php-fpm": "/run/bjm-app-logs/php-fpm",
+    "postgresql": "/run/bjm-app-logs/postgresql",
+    "mattermost": "/run/bjm-app-logs/mattermost",
+    "lightdm": "/run/bjm-app-logs/lightdm",
+    "xorg": "/run/bjm-app-logs/lightdm",
+}
+
+def current_path(key, fallback):
+    if key == "mattermost":
+        try:
+            cfg = json.loads(Path("/opt/mattermost/config/config.json").read_text())
+            return str(cfg.get("LogSettings", {}).get("FileLocation") or fallback)
+        except (OSError, ValueError):
+            return fallback
+    preferred = Path(CURRENT_PATHS.get(key, fallback))
+    return str(preferred if preferred.exists() else Path(fallback))
+
+def detected_mode(key, path):
+    if key == "mattermost":
+        try:
+            cfg = json.loads(Path("/opt/mattermost/config/config.json").read_text())
+            if not cfg.get("LogSettings", {}).get("EnableFile", False):
+                return "Disabled"
+        except (OSError, ValueError):
+            pass
+    target = Path(path)
+    if not target.exists():
+        return "Unknown"
+    proc = subprocess.run(["findmnt", "-n", "-o", "FSTYPE", "--target", str(target)],
+                          text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+    fs = proc.stdout.strip()
+    if fs in ("tmpfs", "ramfs"):
+        return "RAM"
+    return "HDD" if fs else "Unknown"
+
 def load_policy():
     try:
         data = json.loads(POLICY.read_text())
@@ -54,11 +94,12 @@ def scan_inventory():
 def page(message="", success=None, scan_message=""):
     policy = load_policy()
     rows = []
-    for name, path, key in CANDIDATES:
+    for name, fallback, key in CANDIDATES:
         selected = policy.get(key, {})
-        mode = selected.get("mode", "HDD")
+        path = current_path(key, fallback)
+        observed = detected_mode(key, path)
+        mode = observed if observed in ("Disabled", "RAM", "HDD") else selected.get("mode", "HDD")
         checked = "checked" if selected.get("selected", False) else ""
-        exists = Path(path).exists()
         rows.append(f"""
         <tr>
           <td><input class="pick" type="checkbox" name="selected_{key}" value="1" {checked}></td>
@@ -66,7 +107,7 @@ def page(message="", success=None, scan_message=""):
           <td><select name="mode_{key}" data-key="{key}">
             {''.join(f'<option value="{v}" {"selected" if mode == v else ""}>{v}</option>' for v in ("Disabled","RAM","HDD"))}
           </select></td>
-          <td>{'Detected' if exists else 'Not detected'}</td>
+          <td>{html.escape(observed)}</td>
         </tr>""")
     result = ""
     if scan_message:
@@ -92,7 +133,7 @@ pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}}
 <div class="note"><b>Apply safety:</b> This build activates the existing guarded bulk RAM adapter only when all nine listed sources are selected and set to RAM. Mixed policies (HDD/Disabled or unchecked rows) are saved but not activated; they require per-source adapters that are not yet implemented. Review the execution output below after applying.</div>
 {result}
 <form method="post" action="/mattermost-fix"><button type="submit" onclick="return confirm('Correct Mattermost FileLocation and restart only Mattermost?')">Correct Mattermost RAM log path (restart Mattermost only)</button></form>
-<form method="post" action="/apply"><table><thead><tr><th>Select</th><th>Log source</th><th>Current path</th><th>Policy</th><th>Detection</th></tr></thead>
+<form method="post" action="/apply"><table><thead><tr><th>Select</th><th>Log source</th><th>Current path</th><th>Policy (pre-filled from live state)</th><th>Current state</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table><button type="submit">Save and apply RAM policy</button></form>
 <p class="status">This interface is unauthenticated HTTP. Keep TCP {PORT} restricted to the trusted management LAN; never expose it to the Internet.</p></main>
 <script>
