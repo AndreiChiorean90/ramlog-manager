@@ -1,4 +1,4 @@
-# RAMLog Manager 0.3.0 — design and safety
+# RAMLog Manager 0.3.1 — design and safety
 
 ## Apply workflow
 
@@ -18,12 +18,12 @@
 - Nginx: active `*.conf` files under `/etc/nginx`; validated with `nginx -t`.
 - PHP-FPM: global `php-fpm.conf` files under `/etc/php/*/fpm`.
 - PostgreSQL: online Debian clusters receive a managed `conf.d/ramlog-manager.conf` enabling the collector and RAM log directory. PostgreSQL restart causes a brief database interruption.
-- Mattermost: `LogSettings.FileLocation` is redirected to RAM and file logging enabled; console settings are retained.\n- LightDM/Xorg: LightDM log directory and Xorg `-logfile` are directed to RAM through a LightDM drop-in; restarting LightDM terminates graphical sessions.
+- Mattermost: `LogSettings.FileLocation` is redirected to RAM and file logging enabled; console settings are retained.\n- LightDM/Xorg log paths are staged for the next planned reboot; the manager does not restart LightDM automatically.
 - rsyslog: an existing RAM ruleset is detected and preserved. Arbitrary rules are not rewritten.
 
 ## Known gaps
 
-LightDM/Xorg adapter support depends on LightDM version and must be confirmed by runtime verification. rsyslog is not automatically translated when no RAM ruleset is present. Verification relies on lsof's view of open files under `/var/log`; it does not detect every possible persistent write or every application-specific log destination. These gaps must be closed before declaring a host fully compliant.
+LightDM/Xorg log paths are staged for the next planned reboot; the manager does not restart LightDM automatically. rsyslog is not automatically translated when no RAM ruleset is present. Verification relies on lsof's view of open files under `/var/log`; it does not detect every possible persistent write or every application-specific log destination. These gaps must be closed before declaring a host fully compliant.
 
 ## Backups and historical data
 
