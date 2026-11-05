@@ -1,7 +1,7 @@
 # RAMLog Manager
 
 **Target:** Debian and Ubuntu with systemd  
-**Web controller:** 0.3.8 (Python standard library)
+**Web controller:** 0.3.9 (Python standard library)
 
 ## Install
 
@@ -18,7 +18,7 @@ Open `http://SERVER-IP:7780/`. The installer updates the CLI and web controller 
 
 The web UI compares each source's live state with its saved target policy. RAM is the default target for a new source. A row is checked automatically only when its live inventory contains positively identified HDD log writers and its target is RAM. RAM, Mixed, Unknown, and sources with no active writer are never auto-selected. Source matching uses exact process identities and known destination paths rather than loose substring matches. An unchanged RAM source remains unchecked.
 
-Apply passes only explicitly checked sources to the source-scoped CLI operation. It does not invoke the former all-sources bulk adapter. Each selected adapter writes managed configuration only when it differs and restarts only the service(s) whose configuration it actually changed. PostgreSQL is not selected or modified merely because other sources are selected; a Mixed PostgreSQL state remains unchecked unless an operator explicitly selects it.
+Apply passes only explicitly checked sources to the source-scoped CLI operation. It does not invoke the former all-sources bulk adapter. Each selected adapter writes managed configuration only when it differs and restarts only the affected service(s) when they are already active. If LightDM/Xorg is selected, the manager also detects stale persistent GUI log descriptors and can restart LightDM to activate the staged RAM paths. PostgreSQL and LightDM selections require an explicit browser confirmation because their restarts can interrupt database connections or graphical sessions; the CLI independently enforces `--confirm-disruptive`. Inactive services are not started automatically. PostgreSQL is not selected or modified merely because other sources are selected; a Mixed PostgreSQL state remains unchecked unless an operator explicitly selects it.
 
 The current adapters implement RAM targets only. Selecting HDD or Disabled saves the policy but does not apply those targets; those adapters are not implemented yet. The selected adapters may ensure their shared runtime directories; logrotate is not modified by selective Apply. Review the output and run `ramlog verify`; FAIL/INCOMPLETE is not compliance.
 
