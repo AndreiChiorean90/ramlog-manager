@@ -449,6 +449,18 @@ def verify():
         failures.extend(writers)
     if UNSUPPORTED:
         failures.extend(UNSUPPORTED)
+    logrotate_conf = Path("/etc/logrotate.d/ramlog-manager")
+    if not logrotate_conf.exists():
+        failures.append("RAM log rotation policy is missing: /etc/logrotate.d/ramlog-manager")
+    elif not shutil.which("logrotate"):
+        failures.append("logrotate is unavailable; RAM log growth is not bounded")
+    else:
+        rc, out = run(["logrotate", "-d", "/etc/logrotate.conf"])
+        if rc:
+            failures.append("logrotate configuration validation failed: " + out)
+    exporter = run(["systemctl", "is-enabled", "ramlog-export.service"])[1]
+    if exporter != "enabled":
+        failures.append("shutdown RAM-log exporter is not enabled: " + exporter)
     archive = read_config()[1]
     if not archive.parent.exists() or not os.access(archive.parent, os.W_OK):
         failures.append(f"archive destination not writable: {archive.parent}")
